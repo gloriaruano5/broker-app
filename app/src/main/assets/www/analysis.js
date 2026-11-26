@@ -240,7 +240,21 @@
     const top = reasons.filter(r => r.pts !== 0).sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 2)
       .map(r => r.text.split(/\. /)[0].replace(/\.$/, ''));
     const why = top.length ? 'Lo que más pesa: ' + top.join('; ') + '.' : '';
-    return { score, label, kind, reasons, alerts, metrics: m, news: ns, confidence, why };
+    // Escenario más probable a corto plazo según tendencia, impulso y sobrecompra/sobreventa.
+    const sc = { risks: [], watch: [] };
+    const up = m.sma200 ? last > m.sma200 : (m.ch3m || 0) > 0;
+    const f = v => v == null ? '–' : v >= 100 ? v.toFixed(0) : v.toFixed(2);
+    if (up && m.rsi != null && m.rsi >= 70) sc.text = `Tendencia alcista pero muy calentada: lo más probable es una pausa o corrección a corto plazo antes de seguir subiendo. Comprar ahora es pagar el FOMO.`;
+    else if (up && (m.ch1m || 0) < -0.08) sc.text = `Corrección dentro de una tendencia alcista: si aguanta por encima de la media de 200 días (${f(m.sma200)}), suele ser zona de oportunidad; si la pierde, la caída puede alargarse.`;
+    else if (up) sc.text = `Tendencia alcista sana: lo más probable es que continúe, con altibajos normales. Riesgo principal: noticias o datos que rompan el impulso.`;
+    else if (m.rsi != null && m.rsi <= 30) sc.text = `Tendencia bajista con sobreventa: es probable un rebote técnico a corto plazo, pero la tendencia no cambia hasta que recupere la media de 200 días (${f(m.sma200)}).`;
+    else if (m.sma50 && m.sma50 > m.sma200) sc.text = `Precio por debajo de la media de 200 días pero con la de 50 por encima: fase de duda. Lo más probable es que se mueva de lado hasta que rompa ${f(m.sma200)} hacia arriba o hacia abajo.`;
+    else sc.text = `Tendencia bajista: lo más probable a corto plazo es que siga débil. La señal de cambio sería recuperar la media de 200 días (${f(m.sma200)}).`;
+    sc.levels = { support: m.lo52, resistance: m.hi52, sma200: m.sma200 };
+    reasons.filter(r => r.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 3).forEach(r => sc.risks.push(r.text.split(/\. /)[0].replace(/\.$/, '')));
+    // Posición en la barra de -1 (vender) a +1 (comprar).
+    const bar = Math.max(-1, Math.min(1, score / 4));
+    return { score, label, kind, reasons, alerts, metrics: m, news: ns, confidence, why, scenario: sc, bar };
   }
 
   function pct(x) { return (x * 100).toFixed(0) + '%'; }
@@ -278,7 +292,39 @@
     return out;
   }
 
-  const api = { importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
+  /**
+   * "¿Qué pasó antes en situaciones parecidas?": recorre el historial semanal y busca semanas con la misma
+   * tendencia (precio frente a su media de 40 semanas ≈ 200 días) y la misma zona de RSI, y mira el precio 3 meses después.
+   */
+  function historicalOdds(w, horizon = 13) {
+    const c = w.c;
+    if (!c || c.length < 80) return null;
+    const s40 = sma(c, 40), r = rsi(c, 14);
+    const zone = v => v == null ? null : v < 30 ? 0 : v < 50 ? 1 : v < 70 ? 2 : 3;
+    const ZN = ['sobreventa', 'débil', 'fuerte', 'sobrecompra'];
+    const i0 = c.length - 1;
+    if (s40[i0] == null || r[i0] == null) return null;
+    const trend = c[i0] > s40[i0], z = zone(r[i0]);
+    const fwd = [];
+    let lastUsed = -99;
+    for (let i = 40; i < c.length - horizon; i++) {
+      if (s40[i] == null || r[i] == null) continue;
+      if ((c[i] > s40[i]) !== trend || zone(r[i]) !== z) continue;
+      if (i - lastUsed < 4) continue; // semanas casi seguidas cuentan como un solo caso
+      lastUsed = i;
+      fwd.push(c[i + horizon] / c[i] - 1);
+    }
+    const n = fwd.length;
+    const state = `tendencia ${trend ? 'alcista' : 'bajista'} y RSI semanal en zona ${ZN[z]}`;
+    if (n < 6) return { n, state, text: `Situación actual: ${state}. Hay pocos casos parecidos en su historial (${n}) para sacar conclusiones.` };
+    const sorted = fwd.slice().sort((a, b) => a - b);
+    const q = p => sorted[Math.min(n - 1, Math.floor(p * n))];
+    const upPct = fwd.filter(x => x > 0).length / n;
+    return { n, state, upPct, median: q(0.5), bad: q(0.25), good: q(0.75),
+      text: `En su historial hubo ${n} momentos con ${state}. Tres meses después subía en el ${(upPct * 100).toFixed(0)}% de los casos. Lo típico fue un ${signed(q(0.5))}; en el 25% peor de los casos, ${signed(q(0.25))} o menos, y en el 25% mejor, ${signed(q(0.75))} o más.` };
+  }
+
+  const api = { historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
   root.Analysis = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -423,11 +423,41 @@
     const note = notes && notes.assets && notes.assets[a.id];
     const imp = A.importantNews(extra.news, 3);
     const v = extra.valuation;
+    const w = await yahoo(a.yahoo, 'max', '1wk').catch(() => null);
+    const odds = w ? A.historicalOdds(w) : null;
+    const sc = ev.scenario;
+    const ccy = d.meta.currency || '';
+    const today = new Date().toISOString().slice(0, 10);
+    const watch = [];
+    const ys = extra.summary;
+    if (ys && ys.earnings && ys.earnings[0]) watch.push(`Resultados el ${new Date(ys.earnings[0] * 1000).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`);
+    else if (extra.sec && a.sec && extra.sec.assets[a.sec] && extra.sec.assets[a.sec].nextReport && extra.sec.assets[a.sec].nextReport.estimate >= today) watch.push(`Resultados hacia el ${new Date(extra.sec.assets[a.sec].nextReport.estimate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })} (estimado)`);
+    const macro = (window.MACRO_EVENTS || []).filter(e => e[0] >= today && e[1].includes('decisión')).slice(0, 2);
+    macro.forEach(e => watch.push(`${e[1]} el ${new Date(e[0] + 'T12:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`));
+    if (sc.levels.sma200) watch.push(`Si pierde o recupera ${num(sc.levels.sma200)} ${ccy} (media de 200 días)`);
+    const pos = (ev.bar + 1) / 2 * 100;
+    const dots = { Alta: 3, Media: 2, Baja: 1 }[ev.confidence.level];
     body.innerHTML = `
-      <div class="signal ${ev.kind}"><div class="small muted">Orientación actual</div><div style="font-size:17px;font-weight:700">${esc(ev.label)}</div>
-        <div class="small" style="margin-top:4px">${esc(ev.why)}</div>
-        <div class="small muted" style="margin-top:4px">Confianza <b>${ev.confidence.level.toLowerCase()}</b>: ${esc(ev.confidence.text)}</div>
-        <div class="small muted">Puntuación ${ev.score >= 0 ? '+' : ''}${ev.score.toFixed(1)}</div></div>
+      <div class="card"><div class="small muted">Orientación según todo lo analizado</div>
+        <div style="font-size:18px;font-weight:700;margin:4px 0" class="${ev.kind === 'g' ? 'up' : ev.kind === 'r' ? 'down' : 'warn'}">${esc(ev.label)}</div>
+        <div style="position:relative;height:16px;border-radius:999px;margin:14px 0 4px;background:linear-gradient(90deg,#ef4444 0%,#f97316 25%,#f59e0b 50%,#84cc16 75%,#22c55e 100%)">
+          <div style="position:absolute;top:-6px;left:calc(${pos.toFixed(1)}% - 4px);width:8px;height:28px;border-radius:4px;background:#fff;box-shadow:0 0 0 2px #0b1220"></div></div>
+        <div class="row small muted" style="justify-content:space-between"><span>Vender</span><span>Reducir</span><span>Mantener</span><span>Acumular</span><span>Comprar</span></div>
+        <div class="small" style="margin-top:10px">Confianza: <b>${'●'.repeat(dots)}${'○'.repeat(3 - dots)} ${ev.confidence.level.toLowerCase()}</b> · ${esc(ev.confidence.text)}</div>
+        <div class="small" style="margin-top:6px">${esc(ev.why)}</div></div>
+      <div class="card"><h2>Lo más probable</h2>
+        <div>${esc(sc.text)}</div>
+        ${odds ? `<h3>Qué pasó antes en situaciones parecidas</h3><div class="small">${esc(odds.text)}</div>
+          ${odds.upPct != null ? `<div style="display:flex;height:10px;border-radius:6px;overflow:hidden;margin-top:6px"><div style="width:${(odds.upPct * 100).toFixed(0)}%;background:var(--up)"></div><div style="flex:1;background:var(--down)"></div></div>
+          <div class="row small muted" style="justify-content:space-between"><span>subió ${(odds.upPct * 100).toFixed(0)}%</span><span>bajó ${(100 - odds.upPct * 100).toFixed(0)}%</span></div>` : ''}` : ''}
+        ${sc.risks.length ? `<h3>Riesgos principales</h3>${sc.risks.map(r => `<div class="reason down small">▼ ${esc(r)}</div>`).join('')}` : ''}
+        <h3>Niveles clave (${esc(ccy)})</h3><div class="kv">
+          <div><span>Suelo del último año</span><b>${num(sc.levels.support)}</b></div>
+          <div><span>Media de 200 días</span><b>${num(sc.levels.sma200)}</b></div>
+          <div><span>Techo del último año</span><b>${num(sc.levels.resistance)}</b></div>
+          <div><span>Precio actual</span><b>${num(m.last)}</b></div></div>
+        ${watch.length ? `<h3>Qué vigilar</h3>${watch.map(x => `<div class="reason small">👁 ${esc(x)}</div>`).join('')}` : ''}
+        <div class="small muted" style="margin-top:8px">Ningún análisis acierta siempre: esto son probabilidades a partir de los datos de hoy, y cambian cuando cambian los datos. Úsalo para no decidir por impulso, no como garantía.</div></div>
       ${ev.alerts.length ? `<div class="card"><h2>Qué ha cambiado</h2>${ev.alerts.map(x => `<div class="reason ${x.kind === 'g' ? 'up' : x.kind === 'r' ? 'down' : 'warn'}">${esc(x.text)}</div>`).join('')}</div>` : ''}
       ${imp.length ? `<div class="card"><h2>Lo importante esta semana</h2>${newsList(imp, 3)}</div>` : ''}
       ${note ? `<div class="card"><h2>Comentario del día <span class="badge">${esc(notes.date || '')}</span></h2><div style="white-space:pre-wrap">${esc(note)}</div></div>` : ''}
