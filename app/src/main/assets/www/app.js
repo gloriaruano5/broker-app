@@ -298,9 +298,9 @@
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { stack.length = 0; current = { name: b.dataset.tab }; render(); });
   function render() {
     $('#backBtn').classList.toggle('hidden', !stack.length);
-    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (['detalle', 'editar', 'renta'].includes(current.name) ? 'x' : current.name)));
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (['detalle', 'editar', 'renta', 'diario'].includes(current.name) ? 'x' : current.name)));
     window.scrollTo(0, 0);
-    ({ cartera: renderPortfolio, detalle: renderDetail, mercado: renderMarket, ajustes: renderSettings, editar: renderEdit, riesgo: renderRisk, agenda: renderAgenda, renta: renderTax })[current.name](current.arg);
+    ({ cartera: renderPortfolio, detalle: renderDetail, mercado: renderMarket, ajustes: renderSettings, editar: renderEdit, riesgo: renderRisk, agenda: renderAgenda, renta: renderTax, diario: renderJournal })[current.name](current.arg);
   }
 
   // ---------- Vista: Cartera ----------
@@ -309,11 +309,12 @@
     view.innerHTML = `
       <div class="card"><div class="muted small">Valor de la cartera</div>
         <div class="big" id="total">…</div><div id="totalPl" class="small"></div>
-        <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button></div></div>
+        <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button><button class="btn sec" id="jBtn">Diario de decisiones</button></div></div>
       <div class="card" id="alertsCard"><h2>Avisos</h2><div id="alerts" class="muted small">Analizando tus activos…</div></div>
       <div class="card"><h2>Tus activos</h2><div id="list"></div></div>
       <div class="disclaimer">${DISCLAIMER}</div>`;
     $('#taxBtn').onclick = () => go('renta');
+    $('#jBtn').onclick = () => go('diario');
     const list = $('#list');
     list.innerHTML = assets.map(a => `
       <div class="asset" data-id="${esc(a.id)}">
@@ -377,6 +378,10 @@
       const snaps = (await Promise.all(assets.map(a => snapshot(a).catch(() => null)))).filter(Boolean);
       const pl = riskPlan(snaps), outN = pl ? pl.rows.filter(r => r.out).length : 0;
       if (outN && current.name === 'cartera' && $('#alerts')) { if (!alerts.length) $('#alerts').innerHTML = ''; $('#alerts').insertAdjacentHTML('beforeend', `<div class="reason"><span class="dot y" style="display:inline-block"></span> <b>Reparto</b>: ${outN} activo(s) se han separado bastante del reparto propuesto. Mira «Reparto propuesto» en la pestaña Riesgo.</div>`); }
+    } catch (e) {}
+    if (new Date().getMonth() >= 10) try {
+      const t = await yearEndTax();
+      if (current.name === 'cartera' && $('#alerts') && (t.saving > 20 || t.realized < -50)) { if (!$('#alerts').querySelector('.reason')) $('#alerts').innerHTML = ''; $('#alerts').insertAdjacentHTML('afterbegin', `<div class="reason"><span class="dot g" style="display:inline-block"></span> <b>Fin de año</b>: ${t.saving > 20 ? `podrías ahorrar unos ${eur(t.saving)} de impuestos compensando pérdidas` : `tienes ${eur(-t.realized)} de pérdidas que puedes usar`} antes del 31 de diciembre. Mira «Renta y plusvalías».</div>`); }
     } catch (e) {}
     const chk = await dataCheck(false).catch(() => null);
     const bad = chk ? chk.items.filter(x => x.issues.length) : [];
@@ -923,6 +928,7 @@
     const total = held.reduce((s, x) => s + x.value, 0);
     const plan = riskPlan(held);
     view.innerHTML = `
+      ${held.length ? '<div class="card" id="crisisCard"><h2>Simulador de crisis</h2><div class="muted small">Calculando cómo le habría ido a tu cartera en crisis pasadas…</div></div>' : ''}
       ${plan ? `<div class="card"><h2>Reparto propuesto</h2>
         <div class="pills" style="margin-bottom:6px"><button class="pill ${plan.mode === 'igual' ? 'on' : ''}" data-pm="igual">Mismo peso</button><button class="pill ${plan.mode === 'riesgo' ? 'on' : ''}" data-pm="riesgo">Menos peso a lo que más se mueve</button></div>
         <div class="small muted" style="margin-bottom:8px">${plan.mode === 'igual' ? 'Todos tus activos con el mismo peso: al reequilibrar vendes parte de lo que más ha subido y compras lo que se ha quedado atrás. En la prueba histórica fue lo que más rentabilidad dio.' : 'Cada activo pesa menos cuanto más se mueve, para que ninguno domine las subidas y bajadas. En la prueba histórica dio algo menos de rentabilidad, pero con caídas mucho más pequeñas.'} Topes: ${PLAN_CAPS.asset * 100}% por activo y ${PLAN_CAPS.groups.Cripto * 100}% entre todas las criptos. Solo se avisa cuando un activo se separa bastante (más de un 25% de su peso o 2 puntos).</div>
@@ -930,6 +936,9 @@
         <div class="scroll"><table style="font-size:12px"><tr><th></th><th>Ahora</th><th>Prop.</th><th>Ajuste</th></tr>
         ${plan.rows.map(r => `<tr><td>${esc(r.name)}${r.out ? ' <span class="warn">●</span>' : ''}</td><td>${num(r.cw * 100, 1)}%</td><td>${num(r.tw * 100, 1)}%</td><td class="${r.out ? (r.diff > 0 ? 'up' : 'down') : 'muted'}">${r.out ? (r.diff > 0 ? '+' : '') + eur(r.eur) : '–'}</td></tr>`).join('')}
         </table></div>
+        <h3>Plan de aportación del mes</h3>
+        <div class="row" style="gap:8px;align-items:center"><input id="contrib" type="number" inputmode="decimal" min="0" step="10" style="max-width:130px" value="${settings.monthly || ''}" placeholder="€ este mes"><button class="btn sec" id="contribBtn">Calcular</button></div>
+        <div id="contribOut" class="small" style="margin-top:6px"></div>
         <div class="small muted" style="margin-top:6px">Consejo: reequilibra sobre todo con el dinero nuevo que metas (comprando lo que está por debajo), porque vender con ganancias paga impuestos en España. ${plan.test ? esc(plan.test) : ''} No es asesoramiento financiero.</div></div>` : ''}
       ${!held.length ? '<div class="card warn">Aún no has puesto cantidades: el reparto aparecerá cuando apuntes tus compras. El riesgo y la correlación se muestran igualmente.</div>' : ''}
       ${warns.length ? `<div class="card"><h2>Avisos de concentración</h2>${warns.map(w => `<div class="reason warn">${esc(w)}</div>`).join('')}</div>` : held.length ? '<div class="card"><h2>Concentración</h2><div class="small up">Sin concentraciones excesivas.</div></div>' : ''}
@@ -956,6 +965,17 @@
         ${pairs.length >= 8 ? `<h3>Los que más diversifican</h3>${pairs.slice(-3).reverse().map(p => `<div class="reason">${esc(name(p.i))} y ${esc(name(p.j))}: <b class="up">${num(p.c, 2)}</b></div>`).join('')}` : ''}</div>` : ''}
       <div class="disclaimer">${DISCLAIMER}</div>`;
     view.querySelectorAll('[data-pm]').forEach(b => b.onclick = () => { settings.planMode = b.dataset.pm; save('settings', settings); renderRisk(); });
+    const showContrib = () => {
+      const amt = parseFloat(($('#contrib') || {}).value || '0'); const out = $('#contribOut'); if (!out || !plan) return;
+      if (!(amt > 0)) { out.innerHTML = '<span class="muted">Escribe cuánto vas a invertir este mes y te digo en qué activos ponerlo, sin vender nada.</span>'; return; }
+      settings.monthly = amt; save('settings', settings);
+      const cur = {}, tg = {}; plan.rows.forEach(r => { cur[r.id] = r.cw * plan.total; tg[r.id] = r.tw; });
+      const cp = window.Portfolio.contributionPlan(cur, tg, amt, 10);
+      out.innerHTML = cp.length ? cp.map(x => `<div class="reason"><b>${esc((assets.find(a => a.id === x.id) || {}).name || x.id)}</b>: ${eur(x.eur)} <span class="muted">(quedaría en ${num(x.after * 100, 1)}%, objetivo ${num(x.target * 100, 1)}%)</span></div>`).join('') +
+        '<div class="muted" style="margin-top:4px">En Trade Republic puedes hacerlo con un plan de inversión o con órdenes sueltas. Las cantidades menores de 10 € se han juntado con las demás.</div>' : '<span class="muted">Con esa cantidad no hace falta repartir nada.</span>';
+    };
+    if ($('#contribBtn')) { $('#contribBtn').onclick = showContrib; showContrib(); }
+    loadCrisis(held, total);
   }
 
   // ---------- Vista: Agenda ----------
@@ -1064,6 +1084,154 @@
       <div class="card"><h2>Para el borrador de la renta</h2><div class="small muted">Copia esta tabla; tiene los datos que pide la declaración por cada venta.</div><textarea rows="5" readonly>${esc(csv)}</textarea></div>
       <div class="disclaimer">Estimación orientativa. No incluye dividendos, intereses ni otras rentas del ahorro, ni deducciones. Las criptomonedas también tributan por FIFO; las permutas entre criptos también generan ganancia o pérdida. Consúltalo con un asesor fiscal o con el borrador de Hacienda.</div>`;
     view.querySelectorAll('[data-y]').forEach(b => b.onclick = () => { current.year = +b.dataset.y; renderTax(); });
+    if (yr === new Date().getFullYear()) yearEndTax().then(t => { if (current.name === 'renta') view.insertAdjacentHTML('afterbegin', yearEndCard(t)); }).catch(() => {});
+  }
+
+  // ---------- Simulador de crisis ----------
+  const CRISES = [
+    ['Crisis financiera 2008', '2007-10-09', '2009-03-09', 'Quiebra de Lehman Brothers y crisis bancaria mundial.'],
+    ['Caída de finales de 2018', '2018-09-20', '2018-12-24', 'Subidas de tipos de la Fed y guerra comercial con China.'],
+    ['Pandemia 2020', '2020-02-19', '2020-03-23', 'Confinamientos por la COVID-19: la caída más rápida de la historia.'],
+    ['Inflación y tipos 2022', '2022-01-03', '2022-10-12', 'Inflación alta, subidas de tipos y caída de tecnológicas y criptos.'],
+    ['Invierno cripto 2018', '2018-01-06', '2018-12-15', 'Pinchazo de la burbuja de las criptomonedas de 2017.']
+  ];
+  async function loadCrisis(held, total) {
+    const card = $('#crisisCard'); if (!card || !held.length) return;
+    const P = window.Portfolio;
+    const spx = await yahoo('^GSPC', 'max', '1wk').catch(() => null);
+    const btcA = assets.find(a => a.id === 'btc');
+    const btc = await yahoo(btcA ? btcA.yahoo : 'BTC-USD', 'max', '1wk').catch(() => null);
+    const day = s => Date.parse(s + 'T00:00:00Z') / 1000;
+    // Peor caída dentro de la ventana, desde el precio del inicio.
+    const drop = (w, a0, a1) => {
+      if (!w || !w.t.length || w.t[0] > a0 + 8 * 86400) return null;
+      let i0 = 0; while (i0 + 1 < w.t.length && w.t[i0 + 1] <= a0) i0++;
+      let lo = w.c[i0]; for (let i = i0; i < w.t.length && w.t[i] <= a1 + 7 * 86400; i++) lo = Math.min(lo, w.c[i]);
+      return lo / w.c[i0] - 1;
+    };
+    const months = (w, a0, a1) => { // meses hasta recuperar el nivel del inicio
+      if (!w || !w.t.length || w.t[0] > a0 + 8 * 86400) return null; let i0 = 0; while (i0 + 1 < w.t.length && w.t[i0 + 1] <= a0) i0++;
+      for (let i = i0 + 1; i < w.t.length; i++) if (w.t[i] > a1 && w.c[i] >= w.c[i0]) return Math.round((w.t[i] - w.t[i0]) / 2629800);
+      return null;
+    };
+    const vol = w => { if (!w || w.c.length < 60) return null; const c = w.c.slice(-260); const lr = []; for (let i = 1; i < c.length; i++) lr.push(Math.log(c[i] / c[i - 1])); const m = lr.reduce((x, y) => x + y, 0) / lr.length; return Math.sqrt(lr.reduce((x, y) => x + (y - m) ** 2, 0) / (lr.length - 1) * 52); };
+    const ws = {}; await Promise.all(held.map(async s => { ws[s.a.id] = await yahoo(s.a.yahoo, 'max', '1wk').catch(() => null); }));
+    const vSpx = vol(spx), vBtc = vol(btc);
+    const res = CRISES.map(([name, d0, d1, why]) => {
+      const a0 = day(d0), a1 = day(d1);
+      const mkt = drop(spx, a0, a1), mktB = drop(btc, a0, a1);
+      let loss = 0, est = 0, worst = null;
+      const items = held.map(s => {
+        let d = drop(ws[s.a.id], a0, a1), estimated = false;
+        if (d == null) { // sin historial: se estima con el mercado de referencia y su volatilidad relativa
+          const v = vol(ws[s.a.id]);
+          if (isCrypto(s.a) && mktB != null) d = Math.max(-0.95, mktB * (v && vBtc ? v / vBtc : 1));
+          else if (mkt != null) d = Math.max(-0.95, mkt * (v && vSpx ? Math.min(3, v / vSpx) : 1.5));
+          estimated = true;
+        }
+        if (d == null) return null;
+        loss += s.value * d; if (estimated) est += s.value;
+        if (!worst || d < worst.d) worst = { name: s.a.name, d };
+        return { d, estimated };
+      });
+      if (!items.some(Boolean)) return null;
+      return { name, why, d0, d1, mkt, loss, pct: total ? loss / total : null, estShare: total ? est / total : 0, worst, rec: months(spx, a0, a1) };
+    }).filter(Boolean);
+    if (!res.length) { card.innerHTML = '<h2>Simulador de crisis</h2><div class="muted small">No se ha podido descargar el historial del mercado. Prueba más tarde.</div>'; return; }
+    card.innerHTML = `<h2>Simulador de crisis</h2><div class="small muted" style="margin-bottom:8px">Cuánto habría caído tu cartera actual (${eur(total)}) en el peor momento de cada crisis. Para los activos que aún no existían se estima a partir del mercado y de lo que se mueve cada uno.</div>
+      ${res.map(r => `<div style="margin:10px 0"><div class="row"><b class="grow">${esc(r.name)}</b><b class="down">${r.pct != null ? pctS(r.pct) : '–'} · ${eur(r.loss)}</b></div>
+        <div style="height:8px;border-radius:5px;background:var(--card2);margin:5px 0"><div style="height:8px;border-radius:5px;width:${Math.min(100, Math.abs((r.pct || 0) * 100)).toFixed(0)}%;background:var(--down)"></div></div>
+        <div class="small muted">${esc(r.why)} S&P 500: ${r.mkt != null ? pctS(r.mkt) : '–'}${r.rec ? `, tardó ${r.rec} meses en recuperarse` : ''}. Lo que más habría caído: ${r.worst ? esc(r.worst.name) + ' (' + pctS(r.worst.d) + ')' : '–'}.${r.estShare > 0.05 ? ` Un ${num(r.estShare * 100, 0)}% de la cartera es estimado.` : ''}</div></div>`).join('')}
+      <div class="small muted">Supone que todo toca fondo a la vez, así que es el peor caso. No incluye el efecto del euro. Pregúntate si aguantarías esa caída sin vender: quien vende en el fondo convierte la caída en pérdida real.</div>`;
+  }
+
+  // ---------- Diario de decisiones ----------
+  const ACTIONS = { compra: 'Compro', venta: 'Vendo', mantener: 'Mantengo', idea: 'Vigilo' };
+  function journal() { return settings.journal || (settings.journal = []); }
+  async function renderJournal() {
+    $('#title').textContent = 'Diario de decisiones';
+    const J = journal();
+    view.innerHTML = `<div class="card"><h2>Apuntar una decisión</h2>
+        <label>Activo</label><select id="jAsset">${assets.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}</select>
+        <label>Qué haces</label><select id="jAct">${Object.entries(ACTIONS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+        <label>Por qué (en tus palabras)</label><textarea id="jWhy" rows="3" placeholder="Ej.: ha caído mucho tras resultados pero el negocio sigue creciendo"></textarea>
+        <label>Qué esperas que pase (opcional)</label><input id="jExp" placeholder="Ej.: que recupere 150 $ en 6 meses">
+        <div class="btns"><button class="btn" id="jSave">Guardar</button></div>
+        <div class="small muted">Se guarda también el precio y lo que decía la app ese día, para que con el tiempo veas qué te funciona.</div></div>
+      <div class="card" id="jStats"><h2>Qué te funciona</h2><div class="muted small">Calculando…</div></div>
+      <div class="card"><h2>Tus decisiones</h2><div id="jList">${J.length ? '' : '<div class="muted">Aún no has apuntado ninguna.</div>'}</div></div>
+      <div class="disclaimer">El diario solo está en este móvil y en tu copia de seguridad (Ajustes).</div>`;
+    $('#jSave').onclick = async () => {
+      const a = assets.find(x => x.id === $('#jAsset').value); const why = $('#jWhy').value.trim();
+      if (!why) { toast('Escribe el motivo'); return; }
+      $('#jSave').disabled = true;
+      let price = null, ccy = '', sig = null;
+      try { const d = await daily(a); price = d.meta.price || d.c[d.c.length - 1]; ccy = d.meta.currency || '';
+        const fg = await (isCrypto(a) ? fearGreedCrypto() : fearGreedStocks()).catch(() => null);
+        const ev = A.evaluate(d, { fearGreed: fg }); sig = { label: ev.label, kind: ev.kind, score: Math.round(ev.score * 100) / 100 }; } catch (e) {}
+      J.unshift({ id: Date.now().toString(36), date: new Date().toISOString().slice(0, 10), asset: a.id, action: $('#jAct').value, why, expect: $('#jExp').value.trim(), price, ccy, sig });
+      save('settings', settings); toast('Decisión guardada'); renderJournal();
+    };
+    // Resultado de cada decisión: cómo ha ido el precio desde entonces.
+    const rows = await Promise.all(J.map(async j => {
+      const a = assets.find(x => x.id === j.asset); let now = null;
+      if (a && j.price) { const d = await daily(a).catch(() => null); if (d) now = d.meta.price || d.c[d.c.length - 1]; }
+      const ch = now && j.price ? now / j.price - 1 : null;
+      const days = Math.round((Date.now() - Date.parse(j.date)) / 86400000);
+      const good = ch == null || days < 30 || j.action === 'idea' ? null : j.action === 'venta' ? ch < 0 : ch > 0;
+      const withApp = j.sig ? (j.action === 'compra' && j.sig.kind === 'g') || (j.action === 'venta' && j.sig.kind === 'r') || (j.action === 'mantener' && j.sig.kind !== 'r') : null;
+      return { j, a, ch, days, good, withApp };
+    }));
+    if (current.name !== 'diario') return;
+    $('#jList').innerHTML = rows.map(r => `<div class="reason"><div class="row"><b class="grow">${esc(ACTIONS[r.j.action])} ${esc(r.a ? r.a.name : r.j.asset)}</b><span class="muted small">${esc(r.j.date)}</span>
+        <button class="icon" data-jdel="${esc(r.j.id)}">✕</button></div>
+      <div class="small">${esc(r.j.why)}</div>${r.j.expect ? `<div class="small muted">Esperabas: ${esc(r.j.expect)}</div>` : ''}
+      <div class="small muted">Precio entonces ${r.j.price ? num(r.j.price) + ' ' + esc(r.j.ccy) : '–'}${r.ch != null ? ` · desde entonces <b class="${cls(r.ch)}">${pctS(r.ch)}</b>` : ''}${r.j.sig ? ` · la app decía «${esc(r.j.sig.label)}»` : ''}
+      ${r.good != null ? ` · <b class="${r.good ? 'up' : 'down'}">${r.good ? 'de momento, bien' : 'de momento, mal'}</b>` : r.days < 30 ? ' · demasiado pronto para valorar' : ''}</div></div>`).join('') || '<div class="muted">Aún no has apuntado ninguna.</div>';
+    view.querySelectorAll('[data-jdel]').forEach(b => b.onclick = () => { settings.journal = J.filter(x => x.id !== b.dataset.jdel); save('settings', settings); renderJournal(); });
+    const judged = rows.filter(r => r.good != null);
+    const rate = L => L.length ? `${num(L.filter(r => r.good).length / L.length * 100, 0)}% bien (${L.length})` : '–';
+    $('#jStats').innerHTML = `<h2>Qué te funciona</h2>${judged.length < 3 ? `<div class="muted small">Cuando tengas al menos 3 decisiones con más de un mes, aquí verás cuántas salieron bien, y si te va mejor cuando sigues a la app o cuando vas por libre. Llevas ${J.length}.</div>` :
+      `<div class="kv"><div><span>Todas</span><b>${rate(judged)}</b></div><div><span>Compras</span><b>${rate(judged.filter(r => r.j.action === 'compra'))}</b></div>
+        <div><span>Ventas</span><b>${rate(judged.filter(r => r.j.action === 'venta'))}</b></div><div><span>Mantener</span><b>${rate(judged.filter(r => r.j.action === 'mantener'))}</b></div>
+        <div><span>Cuando coincidías con la app</span><b>${rate(judged.filter(r => r.withApp === true))}</b></div><div><span>Cuando ibas en contra</span><b>${rate(judged.filter(r => r.withApp === false))}</b></div></div>
+        <div class="small muted" style="margin-top:6px">«Bien» = el precio fue en la dirección que te convenía. Con pocas decisiones, el azar pesa mucho: míralo con calma.</div>`}`;
+  }
+
+  // ---------- Impuestos antes de fin de año ----------
+  async function yearEndTax() {
+    const P = window.Portfolio, y = new Date().getFullYear();
+    let realized = 0;
+    assets.forEach(a => P.position(a).realized.forEach(r => { if (r.year === y && r.gainEur != null && !r.washRisk) realized += r.gainEur; }));
+    const snaps = (await Promise.all(assets.map(a => snapshot(a).catch(() => null)))).filter(s => s && s.value > 0 && s.plEur != null);
+    const now = Date.now(), two = 61 * 86400000;
+    const losers = snaps.filter(s => s.plEur < -10).map(s => {
+      const recentBuy = (s.a.ops || []).filter(o => o.type === 'compra' && now - Date.parse(o.date) < two).map(o => o.date).sort().pop();
+      return { s, loss: s.plEur, recentBuy };
+    }).sort((x, z) => x.loss - z.loss);
+    const winners = snaps.filter(s => s.plEur > 10).map(s => ({ s, gain: s.plEur })).sort((x, z) => z.gain - x.gain);
+    let saving = 0, used = 0;
+    if (realized > 0) for (const l of losers) { if (l.recentBuy) continue; const take = Math.min(-l.loss, realized - used); if (take <= 0) break; used += take; }
+    saving = P.savingsTax(realized) - P.savingsTax(realized - used);
+    return { y, realized, losers, winners, saving, used };
+  }
+  function yearEndCard(t) {
+    const until = new Date(Date.now() + 61 * 86400000).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' });
+    let body = '';
+    if (t.realized > 0) {
+      body += `<div class="small">Este año llevas <b class="up">${eur(t.realized)}</b> de ganancias por ventas. Si vendes antes del 31 de diciembre posiciones que van en pérdidas, esas pérdidas restan y pagas menos.</div>`;
+      body += t.losers.length ? t.losers.slice(0, 6).map(l => `<div class="reason small"><b>${esc(l.s.a.name)}</b>: ${eur(l.loss)}${l.recentBuy ? ` · <span class="warn">compraste el ${esc(l.recentBuy)}: por la regla de los 2 meses esa pérdida no contaría todavía</span>` : ''}</div>`).join('') + (t.losers.length > 6 ? `<div class="small muted">y ${t.losers.length - 6} más con pérdidas menores.</div>` : '') +
+        (t.saving > 1 ? `<div class="reason up small">Ahorro estimado: unos ${eur(t.saving)} de impuestos.</div>` : '') : '<div class="small muted">No tienes posiciones con pérdidas para compensar.</div>';
+    } else if (t.realized < 0) {
+      body += `<div class="small">Llevas <b class="down">${eur(t.realized)}</b> de pérdidas por ventas este año. Puedes vender posiciones con ganancias por ese importe sin pagar impuestos (y volver a comprarlas, porque la regla de los 2 meses solo afecta a las pérdidas): así subes tu precio de compra a efectos fiscales.</div>` +
+        t.winners.slice(0, 5).map(w => `<div class="reason small"><b>${esc(w.s.a.name)}</b>: +${eur(w.gain)}</div>`).join('') +
+        '<div class="small muted">Si no las usas, las pérdidas se guardan para compensar en los 4 años siguientes.</div>';
+    } else {
+      body += `<div class="small">No hay ventas apuntadas este año, así que no hay ganancias que compensar. Vender ahora con pérdidas no te ahorra nada este año, aunque la pérdida se guardaría 4 años para el futuro.</div>`;
+      if (t.losers.length) body += `<div class="small muted" style="margin-top:4px">Posiciones en pérdidas ahora: ${t.losers.slice(0, 6).map(l => `${esc(l.s.a.name)} (${eur(l.loss)})`).join(', ')}.</div>`;
+    }
+    body += `<div class="small muted" style="margin-top:6px"><b>Regla de los 2 meses:</b> si vendes acciones o ETFs con pérdidas y compras los mismos 2 meses antes o después (si vendes hoy, hasta el ${until}), Hacienda no deja restar esa pérdida hasta que vendas los recomprados. Según el criterio actual de Hacienda no se aplica a criptomonedas, pero confírmalo con un asesor. Importes en euros desde tu precio de compra; estimación orientativa.</div>`;
+    return `<div class="card"><h2>Antes del 31 de diciembre de ${t.y}</h2>${body}</div>`;
   }
 
   // ---------- Vista: Mercado ----------

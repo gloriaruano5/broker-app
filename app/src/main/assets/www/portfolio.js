@@ -216,7 +216,31 @@
     }).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
   }
 
-  const api = { riskWeights, rebalancePlan, position, savingsTax, alignReturns, correlation, maxDrawdown, stdev, portfolioRisk, allocation, concentrationWarnings, valuation, BRACKETS };
+  /**
+   * Aportación mensual sin vender nada: reparte `amount` € entre los activos que están por debajo de su peso propuesto,
+   * para acercar la cartera al reparto ideal. current = {id: € actuales}, target = {id: peso}, minOrder = € mínimos por orden.
+   */
+  function contributionPlan(current, target, amount, minOrder = 10) {
+    const ids = Object.keys(target);
+    const T = ids.reduce((x, id) => x + (current[id] || 0), 0) + amount;
+    let need = {}; ids.forEach(id => need[id] = Math.max(0, target[id] * T - (current[id] || 0)));
+    const S = ids.reduce((x, id) => x + need[id], 0);
+    let alloc = {};
+    if (S >= amount && S > 0) ids.forEach(id => alloc[id] = need[id] * amount / S);
+    else ids.forEach(id => alloc[id] = need[id] + (amount - S) * target[id]);
+    // Órdenes muy pequeñas no compensan: se quitan y se reparte lo suyo entre las demás.
+    for (let k = 0; k < 10; k++) {
+      const small = ids.filter(id => alloc[id] > 0 && alloc[id] < minOrder);
+      if (!small.length) break;
+      const freed = small.reduce((x, id) => x + alloc[id], 0); small.forEach(id => alloc[id] = 0);
+      const rest = ids.filter(id => alloc[id] > 0), rs = rest.reduce((x, id) => x + alloc[id], 0);
+      if (!rest.length) { const best = ids.slice().sort((x, y) => need[y] - need[x])[0]; alloc[best] = amount; break; }
+      rest.forEach(id => alloc[id] += freed * alloc[id] / rs);
+    }
+    return ids.filter(id => alloc[id] > 0.5).map(id => ({ id, eur: alloc[id], after: ((current[id] || 0) + alloc[id]) / T, target: target[id] })).sort((x, y) => y.eur - x.eur);
+  }
+
+  const api = { contributionPlan, riskWeights, rebalancePlan, position, savingsTax, alignReturns, correlation, maxDrawdown, stdev, portfolioRisk, allocation, concentrationWarnings, valuation, BRACKETS };
   root.Portfolio = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
