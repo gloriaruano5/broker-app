@@ -82,24 +82,31 @@ def run_chronos():
     for k in range(0, len(tasks), B):
         batch = tasks[k:k + B]
         ctx = [torch.tensor(W[a].values[max(0, i - 511):i + 1], dtype=torch.float32) for a, d, i in batch]
-        q, _ = pipe.predict_quantiles(context=ctx, prediction_length=max(H), quantile_levels=[0.1, 0.5, 0.9])
+        q, _ = pipe.predict_quantiles(ctx, prediction_length=max(H), quantile_levels=[0.1, 0.5, 0.9])
         q = q.numpy()
         for (a, d, i), qq in zip(batch, q):
             out[(a, d)] = qq  # [h, 3]
     return out
 
 def run_timesfm():
-    import timesfm
-    tfm = timesfm.TimesFm(hparams=timesfm.TimesFmHparams(backend='cpu', per_core_batch_size=32, horizon_len=max(H)),
-                          checkpoint=timesfm.TimesFmCheckpoint(huggingface_repo_id='google/timesfm-1.0-200m-pytorch'))
+    import timesfm, torch
+    torch.set_float32_matmul_precision('high')
+    if hasattr(timesfm, 'TimesFM_2p5_200M_torch'):  # TimesFM 2.5
+        model = timesfm.TimesFM_2p5_200M_torch.from_pretrained('google/timesfm-2.5-200m-pytorch')
+        model.compile(timesfm.ForecastConfig(max_context=512, max_horizon=128, normalize_inputs=True, use_continuous_quantile_head=True, force_flip_invariance=True, infer_is_positive=True, fix_quantile_crossing=True))
+        fc = lambda ctx: model.forecast(horizon=max(H), inputs=ctx)[1]
+    else:  # versiones 1.x
+        tfm = timesfm.TimesFm(hparams=timesfm.TimesFmHparams(backend='cpu', per_core_batch_size=32, horizon_len=max(H)),
+                              checkpoint=timesfm.TimesFmCheckpoint(huggingface_repo_id='google/timesfm-1.0-200m-pytorch'))
+        fc = lambda ctx: tfm.forecast(ctx, freq=[1] * len(ctx))[1]
     out = {}
     B = 64
     for k in range(0, len(tasks), B):
         batch = tasks[k:k + B]
         ctx = [W[a].values[max(0, i - 511):i + 1].astype(np.float32) for a, d, i in batch]
-        _, qf = tfm.forecast(ctx, freq=[1] * len(ctx))
+        qf = np.asarray(fc(ctx))
         for (a, d, i), qq in zip(batch, qf):
-            out[(a, d)] = qq[:, [1, 5, 9]]  # columnas: media, q0.1..q0.9
+            out[(a, d)] = qq[:max(H), [1, 5, 9]]  # columnas: media, q0.1..q0.9
     return out
 
 MODEL_FC = {}
