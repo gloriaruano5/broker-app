@@ -11,11 +11,11 @@
   function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* lleno: se ignora */ } }
   let assets = load('assets', null) || window.DEFAULT_ASSETS.map(a => Object.assign({ qty: 0, cost: 0 }, a));
   // Si la lista inicial se corrige (símbolos, ISIN), se actualiza en el móvil sin tocar cantidades ni operaciones.
-  const DEFAULTS_VERSION = 3;
+  const DEFAULTS_VERSION = 4;
   if (load('defaultsVersion', 1) < DEFAULTS_VERSION) {
     assets.forEach(a => {
       const def = window.DEFAULT_ASSETS.find(d => d.id === a.id);
-      if (def) ['yahoo', 'note', 'isin', 'name'].forEach(k => { if (def[k] !== undefined) a[k] = def[k]; else if (k !== 'name') delete a[k]; });
+      if (def) ['yahoo', 'note', 'isin', 'name', 'resolveIsin'].forEach(k => { if (def[k] !== undefined) a[k] = def[k]; else if (k !== 'name') delete a[k]; });
     });
     // Activos nuevos de la lista inicial que aún no estén en el móvil.
     window.DEFAULT_ASSETS.forEach((d, i) => { if (!assets.some(a => a.id === d.id)) assets.splice(Math.min(i, assets.length), 0, Object.assign({ qty: 0, cost: 0 }, d)); });
@@ -71,13 +71,31 @@
         const t = [], c = [];
         (res.timestamp || []).forEach((ts, i) => { const v = q.close && q.close[i]; if (v != null && isFinite(v)) { t.push(ts); c.push(v); } });
         const meta = res.meta || {};
+        // Cierre anterior: el último cierre de un día anterior al de la cotización actual.
+        // (chartPreviousClose es el cierre antes del inicio del rango, no el de ayer.)
+        let prev = null;
+        if (interval === '1d' && t.length >= 2) {
+          const day = ts => new Date(ts * 1000).toISOString().slice(0, 10);
+          const cur = day(meta.regularMarketTime || t[t.length - 1]);
+          for (let i = t.length - 1; i >= 0; i--) if (day(t[i]) < cur) { prev = c[i]; break; }
+        }
         const div = Object.values((res.events && res.events.dividends) || {}).map(x => ({ t: x.date, amount: x.amount })).sort((a, b) => a.t - b.t);
-        return { t, c, div, meta: { price: meta.regularMarketPrice, prev: meta.chartPreviousClose ?? meta.previousClose, currency: meta.currency, name: meta.longName || meta.shortName, exchange: meta.fullExchangeName } };
+        return { t, c, div, meta: { price: meta.regularMarketPrice, prev: prev, currency: meta.currency, name: meta.longName || meta.shortName, exchange: meta.fullExchangeName } };
       }
       throw new Error('Yahoo no responde (' + (last ? last.status : '?') + ')');
     });
   }
-  async function daily(a) { return yahoo(a.yahoo, '2y', '1d'); }
+  async function daily(a) {
+    if (a.resolveIsin && a.isin && !a.resolved) await resolveListing(a).catch(() => {});
+    return yahoo(a.yahoo, '2y', '1d');
+  }
+  /** Busca por ISIN la cotización en euros (Xetra, luego otras bolsas alemanas) y la guarda. */
+  async function resolveListing(a) {
+    const r = await http(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(a.isin)}&quotesCount=15&newsCount=0`);
+    const quotes = (JSON.parse(r.text).quotes || []).map(q => q.symbol).filter(Boolean);
+    const pick = quotes.find(s => s.endsWith('.DE')) || quotes.find(s => /\.(F|MU|SG|DU|BE|HM)$/.test(s)) || quotes.find(s => /\.(MI|AS|PA)$/.test(s)) || quotes[0];
+    if (pick) { a.yahoo = pick; a.resolved = true; persist(); }
+  }
 
   async function fxToEur(ccy) {
     if (!ccy || ccy === 'EUR') return 1;
@@ -885,7 +903,7 @@
     $('#eSave').onclick = () => {
       Object.assign(a, { name: $('#eName').value.trim(), yahoo: $('#eYahoo').value.trim(), type: $('#eType').value, sec: $('#eSec').value.trim().toUpperCase(), news: $('#eNews').value.trim() || $('#eName').value.trim(), themes: [...themes] });
       if (!a.name || !a.yahoo) return toast('Faltan el nombre o el símbolo');
-      delete a.note;
+      delete a.note; delete a.resolveIsin;
       if (isNew) assets.push(a);
       persist(); toast('Guardado'); window.appBack();
     };
