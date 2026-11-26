@@ -318,9 +318,9 @@
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { stack.length = 0; current = { name: b.dataset.tab }; render(); });
   function render() {
     $('#backBtn').classList.toggle('hidden', !stack.length);
-    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (['detalle', 'editar', 'renta', 'diario'].includes(current.name) ? 'x' : current.name)));
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (['detalle', 'editar', 'renta', 'diario', 'oportunidades'].includes(current.name) ? 'x' : current.name)));
     window.scrollTo(0, 0);
-    ({ cartera: renderPortfolio, detalle: renderDetail, mercado: renderMarket, ajustes: renderSettings, editar: renderEdit, riesgo: renderRisk, agenda: renderAgenda, renta: renderTax, diario: renderJournal })[current.name](current.arg);
+    ({ cartera: renderPortfolio, detalle: renderDetail, mercado: renderMarket, ajustes: renderSettings, editar: renderEdit, riesgo: renderRisk, agenda: renderAgenda, renta: renderTax, diario: renderJournal, oportunidades: renderOpps })[current.name](current.arg);
   }
 
   // ---------- Vista: Cartera ----------
@@ -330,12 +330,14 @@
     view.innerHTML = `
       <div class="card"><div class="muted small">Valor de la cartera</div>
         <div class="big" id="total">…</div><div id="totalPl" class="small"></div>
-        <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button><button class="btn sec" id="jBtn">Diario de decisiones</button></div></div>
+        <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button><button class="btn sec" id="jBtn">Diario de decisiones</button></div>
+        <button class="btn" id="oppBtn" style="width:100%;margin-top:8px">🎯 Oportunidades de compra de hoy</button></div>
       <div class="card" id="alertsCard"><h2>Avisos</h2><div id="alerts" class="muted small">Analizando tus activos…</div></div>
       <div class="card"><h2>Tus activos</h2><div id="list"></div></div>
       <div class="disclaimer">${DISCLAIMER}</div>`;
     $('#taxBtn').onclick = () => go('renta');
     $('#jBtn').onclick = () => go('diario');
+    $('#oppBtn').onclick = () => go('oportunidades');
     const list = $('#list');
     list.innerHTML = `<div class="phead"><span>Activo</span><span>Valor</span><span>Desde la compra</span></div>` + byValue(assets).map(a => `
       <div class="asset prow" data-id="${esc(a.id)}">
@@ -1176,6 +1178,85 @@
         <div style="height:8px;border-radius:5px;background:var(--card2);margin:5px 0"><div style="height:8px;border-radius:5px;width:${Math.min(100, Math.abs((r.pct || 0) * 100)).toFixed(0)}%;background:var(--down)"></div></div>
         <div class="small muted">${esc(r.why)} S&P 500: ${r.mkt != null ? pctS(r.mkt) : '–'}${r.rec ? `, tardó ${r.rec} meses en recuperarse` : ''}. Lo que más habría caído: ${r.worst ? esc(r.worst.name) + ' (' + pctS(r.worst.d) + ')' : '–'}.${r.estShare > 0.05 ? ` Un ${num(r.estShare * 100, 0)}% de la cartera es estimado.` : ''}</div></div>`).join('')}
       <div class="small muted">Supone que todo toca fondo a la vez, así que es el peor caso. No incluye el efecto del euro. Pregúntate si aguantarías esa caída sin vender: quien vende en el fondo convierte la caída en pérdida real.</div>`;
+  }
+
+  // ---------- Oportunidades de compra ----------
+  // La prueba histórica dice que la señal sola apenas acierta la dirección, pero que comprar lo que se ha quedado
+  // por debajo del reparto propuesto (rebalancear con dinero nuevo) sí mejoró el resultado y redujo caídas.
+  // Por eso la lista combina: hueco en el reparto (lo que más pesa), la señal de la app y si la señal ha funcionado antes en ese activo.
+  async function renderOpps() {
+    $('#title').textContent = 'Oportunidades de compra';
+    view.innerHTML = `<div class="card"><div class="small muted">Analizando tus ${assets.length} activos y ${(window.WATCHLIST || []).length} más del mercado: reparto, señal, tendencia y precios… (tarda un poco la primera vez)</div></div>`;
+    const fg = { stocks: await fearGreedStocks().catch(() => null), crypto: await fearGreedCrypto().catch(() => null) };
+    const snaps = (await Promise.all(assets.map(a => snapshot(a).catch(() => null)))).filter(Boolean);
+    if (current.name !== 'oportunidades') return;
+    const plan = riskPlan(snaps);
+    const gap = {}; if (plan) plan.rows.forEach(r => gap[r.id] = r);
+    const regimes = {};
+    const rows = await Promise.all(snaps.map(async sn => {
+      const a = sn.a, d = sn.d;
+      const key = isCrypto(a) ? 'c' : 's';
+      if (!(key in regimes)) regimes[key] = marketRegime(a).catch(() => null);
+      const regime = await regimes[key];
+      const ev = A.evaluate(d, { fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules, regime });
+      const bt = await assetBacktest(a).catch(() => null);
+      const ver = bt ? A.backtestVerdict(bt, ev.score) : null;
+      const b = A.bucketOf(ev.score);
+      const g = gap[a.id] || null, diff = g ? g.diff : 0;
+      // Precio de entrada: una bajada normal de una semana según lo que se mueve el activo (se toca más o menos la mitad de las veces).
+      const c = d.c.slice(-61), lr = []; for (let i = 1; i < c.length; i++) if (c[i] > 0 && c[i - 1] > 0) lr.push(Math.log(c[i] / c[i - 1]));
+      const mu = lr.reduce((x, y) => x + y, 0) / (lr.length || 1);
+      const sdD = lr.length > 20 ? Math.sqrt(lr.reduce((x, y) => x + (y - mu) ** 2, 0) / (lr.length - 1)) : 0.02;
+      const pxEur = sn.price * sn.fx, limit = pxEur * Math.exp(-0.7 * sdD * Math.sqrt(5));
+      const sma50 = c.length >= 50 ? c.slice(-50).reduce((x, y) => x + y, 0) / 50 * sn.fx : null;
+      let rank = diff * 100 + ev.score * 1.5 + (ver && ver.worked && (b === 'buy' || b === 'acc') ? 0.5 : 0);
+      return { sn, a, ev, b, ver, diff, g, pxEur, limit, sma50, rank, sdD };
+    }));
+    // Fuera de tu cartera: solo la señal (no hay reparto que completar), así que se exige que sea claramente favorable.
+    const mine = new Set(assets.map(a => a.yahoo));
+    const outside = (await Promise.all((window.WATCHLIST || []).filter(w => !mine.has(w.yahoo)).map(async w => {
+      try {
+        const d = await yahoo(w.yahoo, '2y', '1d'); if (d.c.length < 200) return null;
+        const fx = await fxToEur(d.meta.currency); const key = isCrypto(w) ? 'c' : 's';
+        if (!(key in regimes)) regimes[key] = marketRegime(w).catch(() => null);
+        const ev = A.evaluate(d, { fearGreed: isCrypto(w) ? fg.crypto : fg.stocks, regime: await regimes[key] });
+        const c = d.c.slice(-61), lr = []; for (let i = 1; i < c.length; i++) if (c[i] > 0 && c[i - 1] > 0) lr.push(Math.log(c[i] / c[i - 1]));
+        const mu = lr.reduce((x, y) => x + y, 0) / (lr.length || 1), sdD = Math.sqrt(lr.reduce((x, y) => x + (y - mu) ** 2, 0) / Math.max(1, lr.length - 1));
+        const pxEur = (d.meta.price || d.c[d.c.length - 1]) * fx;
+        return { w, ev, b: A.bucketOf(ev.score), pxEur, limit: pxEur * Math.exp(-0.7 * sdD * Math.sqrt(5)), y1: A.changeSince(d.t, d.c, 365) };
+      } catch (e) { return null; }
+    }))).filter(r => r && (r.b === 'buy' || r.b === 'acc')).sort((x, y) => y.ev.score - x.ev.score).slice(0, 5);
+    if (current.name !== 'oportunidades') return;
+    const good = rows.filter(r => r.b !== 'caut' && r.b !== 'sell' && (r.diff > 0.005 || r.b === 'buy' || r.b === 'acc')).sort((x, y) => y.rank - x.rank).slice(0, 5);
+    const wait = rows.filter(r => r.b === 'caut' || r.b === 'sell' || (r.g && r.g.out && r.diff < 0)).sort((x, y) => x.ev.score - y.ev.score).slice(0, 6);
+    const monthly = +settings.monthly || 0;
+    const card = (r, i) => {
+      const amt = r.g && r.diff > 0 ? Math.max(10, Math.round((monthly ? Math.min(monthly / 2, r.diff * plan.total) : r.diff * plan.total) / 10) * 10) : null;
+      const why = [];
+      if (r.diff > 0.005) why.push(`pesa ${num(r.g.cw * 100, 1)}% en tu cartera y el reparto propuesto es ${num(r.g.tw * 100, 1)}%`);
+      why.push(`la app dice «${esc(r.ev.label)}»`);
+      if (r.ver && (r.b === 'buy' || r.b === 'acc')) why.push(r.ver.worked ? 'y en su historial esta señal ha funcionado' : 'aunque en su historial esta señal no ha funcionado mucho');
+      const when = r.b === 'buy' || r.b === 'acc'
+        ? `Puedes comprar ahora o poner una <b>orden límite a ${num(r.limit, 2)} €</b> válida una semana.`
+        : `Sin prisa: pon una <b>orden límite a ${num(r.limit, 2)} €</b> válida una semana. Si no se ejecuta, cómpralo con tu próxima aportación al precio que esté.`;
+      return `<div class="opp"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
+        <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Precio de entrada orientativo</span><b class="up">${num(r.limit, 2)} €</b></div>
+        ${amt ? `<div><span>Cuánto, orientativo</span><b>${eur(amt)}</b></div>` : ''}${r.sma50 ? `<div><span>Media de 50 días</span><b>${num(r.sma50, 2)} €</b></div>` : ''}</div>
+        <div class="small" style="margin-top:6px">${when}</div>
+        <div class="small muted" style="margin-top:4px">Por qué: ${why.join(', ')}.</div></div>`;
+    };
+    view.innerHTML = `<div class="card"><h2>🎯 En tu cartera: mejores opciones hoy</h2>
+        <div class="small muted" style="margin-bottom:6px">Ordenadas combinando tres cosas: lo que le falta a cada activo para llegar al reparto propuesto (lo que más ha funcionado en la prueba histórica), la señal de la app y si esa señal ha acertado antes en ese activo. El precio de entrada es una bajada normal de una semana para ese activo: se alcanza más o menos la mitad de las veces.</div>
+        ${good.length ? good.map(card).join('') : '<div class="muted">Hoy ningún activo destaca para comprar: todos están cerca de su reparto o con señal de precaución. Esperar también es una decisión.</div>'}</div>
+      <div class="card"><h2>🌍 Fuera de tu cartera</h2>
+        <div class="small muted" style="margin-bottom:6px">Revisados ${(window.WATCHLIST || []).length} activos grandes del mercado (ETFs, acciones de EE. UU., Europa y España). Aquí solo cuenta la señal de la app, que es la parte menos fiable, así que si te interesa alguno empieza con poco (por ejemplo, un 2-3% de tu cartera).</div>
+        ${outside.length ? outside.map((r, i) => `<div class="opp"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.w.name)}</b><span class="dot ${r.ev.kind}"></span></div>
+          <div class="small muted">${esc(r.w.tag)} · ${esc(r.w.yahoo)}${r.y1 != null ? ` · último año <span class="${cls(r.y1)}">${pctS(r.y1)}</span>` : ''}</div>
+          <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Precio de entrada orientativo</span><b class="up">${num(r.limit, 2)} €</b></div></div>
+          <div class="small muted" style="margin-top:4px">La app dice «${esc(r.ev.label)}».</div></div>`).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
+      ${wait.length ? `<div class="card"><h2>⏸️ Mejor esperar</h2>${wait.map(r => `<div class="reason small"><b>${esc(r.a.name)}</b>: ${r.b === 'caut' || r.b === 'sell' ? `la app dice «${esc(r.ev.label)}»` : `ya pesa ${num(r.g.cw * 100, 1)}% (propuesto ${num(r.g.tw * 100, 1)}%)`}.</div>`).join('')}</div>` : ''}
+      <div class="card small muted">Fear & Greed: bolsa ${fg.stocks ? Math.round(fg.stocks.score) : '–'}, cripto ${fg.crypto ? Math.round(fg.crypto.score) : '–'}. Los precios en euros son al cambio de hoy; en Trade Republic el precio puede variar un poco según la bolsa. ${monthly ? `Las cantidades parten de tu aportación de ${eur(monthly)} al mes (Riesgo).` : 'Si pones tu aportación mensual en Riesgo > Reparto propuesto, las cantidades se ajustan a ella.'}</div>
+      <div class="disclaimer">Lista orientativa generada automáticamente, no es asesoramiento financiero. Nadie sabe si un precio va a subir o bajar: la prueba histórica muestra que la app acierta la dirección poco más que el azar, y que lo que más ayuda es repartir bien y comprar de forma regular. Decide tú y no inviertas dinero que puedas necesitar.</div>`;
   }
 
   // ---------- Diario de decisiones ----------

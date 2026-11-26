@@ -96,3 +96,36 @@ window.MACRO_EVENTS = [
   ['2027-11-17', 'Fed: decisión de tipos'],
   ['2027-12-16', 'BCE: decisión de tipos']
 ];
+
+// Otros activos del mercado (grandes y líquidos, disponibles en Trade Republic) para buscar oportunidades fuera de la cartera.
+window.WATCHLIST = [
+  { id: 'w-vwce', name: 'Vanguard FTSE All-World', yahoo: 'VWCE.DE', type: 'ETF', tag: 'Bolsa mundial' },
+  { id: 'w-eunl', name: 'iShares Core MSCI World', yahoo: 'EUNL.DE', type: 'ETF', tag: 'Bolsa mundial' },
+  { id: 'w-is3n', name: 'iShares MSCI EM IMI', yahoo: 'IS3N.DE', type: 'ETF', tag: 'Emergentes' },
+  { id: 'w-exsa', name: 'iShares STOXX Europe 600', yahoo: 'EXSA.DE', type: 'ETF', tag: 'Europa' },
+  { id: 'w-sxrv', name: 'iShares Nasdaq 100', yahoo: 'SXRV.DE', type: 'ETF', tag: 'Tecnología EE. UU.' },
+  { id: 'w-zprv', name: 'SPDR US Small Cap Value', yahoo: 'ZPRV.DE', type: 'ETF', tag: 'Pequeñas EE. UU.' },
+  { id: 'w-aapl', name: 'Apple', yahoo: 'AAPL', type: 'Acción', tag: 'Tecnología' },
+  { id: 'w-msft', name: 'Microsoft', yahoo: 'MSFT', type: 'Acción', tag: 'Tecnología' },
+  { id: 'w-amzn', name: 'Amazon', yahoo: 'AMZN', type: 'Acción', tag: 'Consumo / nube' },
+  { id: 'w-meta', name: 'Meta Platforms', yahoo: 'META', type: 'Acción', tag: 'Tecnología' },
+  { id: 'w-avgo', name: 'Broadcom', yahoo: 'AVGO', type: 'Acción', tag: 'Chips' },
+  { id: 'w-amd', name: 'AMD', yahoo: 'AMD', type: 'Acción', tag: 'Chips' },
+  { id: 'w-asml', name: 'ASML', yahoo: 'ASML.AS', type: 'Acción', tag: 'Chips (Europa)' },
+  { id: 'w-sap', name: 'SAP', yahoo: 'SAP.DE', type: 'Acción', tag: 'Software (Europa)' },
+  { id: 'w-lly', name: 'Eli Lilly', yahoo: 'LLY', type: 'Acción', tag: 'Salud' },
+  { id: 'w-nvo', name: 'Novo Nordisk', yahoo: 'NVO', type: 'Acción', tag: 'Salud' },
+  { id: 'w-jpm', name: 'JPMorgan Chase', yahoo: 'JPM', type: 'Acción', tag: 'Bancos' },
+  { id: 'w-v', name: 'Visa', yahoo: 'V', type: 'Acción', tag: 'Pagos' },
+  { id: 'w-brk', name: 'Berkshire Hathaway B', yahoo: 'BRK-B', type: 'Acción', tag: 'Diversificada' },
+  { id: 'w-cost', name: 'Costco', yahoo: 'COST', type: 'Acción', tag: 'Consumo' },
+  { id: 'w-tsla', name: 'Tesla', yahoo: 'TSLA', type: 'Acción', tag: 'Automóvil / energía' },
+  { id: 'w-orcl', name: 'Oracle', yahoo: 'ORCL', type: 'Acción', tag: 'Software / nube' },
+  { id: 'w-itx', name: 'Inditex', yahoo: 'ITX.MC', type: 'Acción', tag: 'Consumo (España)' },
+  { id: 'w-san', name: 'Banco Santander', yahoo: 'SAN.MC', type: 'Acción', tag: 'Bancos (España)' },
+  { id: 'w-ibe', name: 'Iberdrola', yahoo: 'IBE.MC', type: 'Acción', tag: 'Eléctricas (España)' },
+  { id: 'w-mc', name: 'LVMH', yahoo: 'MC.PA', type: 'Acción', tag: 'Lujo (Europa)' },
+  { id: 'w-rhm', name: 'Rheinmetall', yahoo: 'RHM.DE', type: 'Acción', tag: 'Defensa (Europa)' },
+  { id: 'w-sie', name: 'Siemens', yahoo: 'SIE.DE', type: 'Acción', tag: 'Industria (Europa)' },
+  { id: 'w-xrp', name: 'XRP', yahoo: 'XRP-USD', type: 'Cripto', tag: 'Cripto' }
+];
