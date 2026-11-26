@@ -113,9 +113,11 @@
       cats.add('tendencia');
       if (last > m.sma200) add(1, 'El precio está por encima de su media de 200 días: la tendencia de fondo es alcista.');
       else add(-1, 'El precio está por debajo de su media de 200 días: la tendencia de fondo es bajista.');
+      // Pesos revisados con la prueba histórica de noviembre de 2026 (19 activos, 2016-2026, dos periodos por separado):
+      // estar muy por encima de la media NO anticipó peores resultados; estar muy por debajo sí.
       const dist = last / m.sma200 - 1;
-      if (dist > 0.35) add(-1, `Está un ${pct(dist)} por encima de su media de 200 días. Subida muy estirada: riesgo de FOMO y de corrección.`);
-      else if (dist < -0.25) add(0.5, `Está un ${pct(-dist)} por debajo de su media de 200 días: barato respecto a su historia reciente, aunque la tendencia no ha girado.`, 'y');
+      if (dist > 0.35) reasons.push({ pts: 0, kind: 'y', text: `Está un ${pct(dist)} por encima de su media de 200 días. Subida muy estirada: históricamente no ha sido motivo para vender, pero las sacudidas suelen ser fuertes. Mejor no comprar de golpe.` });
+      else if (dist < -0.25) add(-0.5, `Está un ${pct(-dist)} por debajo de su media de 200 días. Aunque parezca barato, en la prueba histórica las caídas así solían continuar.`);
     } else {
       reasons.push({ pts: 0, kind: 'y', text: 'Hay menos de 200 días de historial: el análisis de tendencia es limitado.' });
     }
@@ -132,11 +134,17 @@
     }
     if (m.rsi != null) {
       cats.add('rsi');
-      if (m.rsi >= 75) add(-1, `RSI de ${m.rsi.toFixed(0)}: sobrecompra fuerte. Suele ser mal momento para comprar con prisa.`);
-      else if (m.rsi >= 70) add(-0.5, `RSI de ${m.rsi.toFixed(0)}: zona de sobrecompra.`);
-      else if (m.rsi <= 25) add(1, `RSI de ${m.rsi.toFixed(0)}: sobreventa fuerte. Históricamente zona de posibles rebotes.`);
-      else if (m.rsi <= 30) add(0.5, `RSI de ${m.rsi.toFixed(0)}: zona de sobreventa.`);
+      // En la prueba histórica, un RSI muy alto fue señal de fuerza (siguió subiendo más de lo normal), no de venta,
+      // y la sobreventa no fue una señal de compra fiable.
+      if (m.rsi >= 75) add(0.5, `RSI de ${m.rsi.toFixed(0)}: impulso muy fuerte. En la prueba histórica, a 3 meses solía seguir subiendo más de lo normal, aunque con sacudidas.`);
+      else if (m.rsi >= 70) reasons.push({ pts: 0, kind: 'y', text: `RSI de ${m.rsi.toFixed(0)}: zona de sobrecompra. Históricamente no ha sido una señal de venta fiable por sí sola.` });
+      else if (m.rsi <= 30) reasons.push({ pts: 0, kind: 'y', text: `RSI de ${m.rsi.toFixed(0)}: sobreventa. Puede rebotar, pero en la prueba histórica no fue una señal de compra fiable si la tendencia es bajista.` });
       else reasons.push({ pts: 0, kind: 'y', text: `RSI de ${m.rsi.toFixed(0)}: zona neutral.` });
+    }
+    if (m.ch3m != null) {
+      cats.add('impulso');
+      if (m.ch3m > 0.02) add(0.5, `Ha subido un ${pct(m.ch3m)} en 3 meses: impulso positivo (en la prueba histórica, el impulso tendía a continuar).`);
+      else if (m.ch3m < -0.02) add(-0.5, `Ha bajado un ${pct(-m.ch3m)} en 3 meses: impulso negativo.`);
     }
     if (m.fromHi < -0.3) reasons.push({ pts: 0, kind: 'y', text: `Está un ${pct(-m.fromHi)} por debajo de su máximo del último año.` });
     if (m.ch1w != null && Math.abs(m.ch1w) > 0.08)
@@ -229,7 +237,7 @@
     const plus = reasons.filter(r => r.pts > 0).reduce((a, r) => a + r.pts, 0);
     const minus = -reasons.filter(r => r.pts < 0).reduce((a, r) => a + r.pts, 0);
     const agreement = plus + minus ? Math.abs(plus - minus) / (plus + minus) : 0;
-    const possible = extra.valuation !== undefined ? 7 : 5;
+    const possible = extra.valuation !== undefined ? 8 : 6;
     const coverage = Math.min(1, cats.size / possible);
     const cScore = agreement * 0.6 + coverage * 0.4;
     const confidence = {
@@ -244,7 +252,7 @@
     const sc = { risks: [], watch: [] };
     const up = m.sma200 ? last > m.sma200 : (m.ch3m || 0) > 0;
     const f = v => v == null ? '–' : v >= 100 ? v.toFixed(0) : v.toFixed(2);
-    if (up && m.rsi != null && m.rsi >= 70) sc.text = `Tendencia alcista pero muy calentada: lo más probable es una pausa o corrección a corto plazo antes de seguir subiendo. Comprar ahora es pagar el FOMO.`;
+    if (up && m.rsi != null && m.rsi >= 70) sc.text = `Tendencia alcista con mucho impulso: en situaciones así, históricamente solía seguir subiendo en los meses siguientes, pero con sacudidas fuertes. Si compras, mejor por partes y no todo de golpe.`;
     else if (up && (m.ch1m || 0) < -0.08) sc.text = `Corrección dentro de una tendencia alcista: si aguanta por encima de la media de 200 días (${f(m.sma200)}), suele ser zona de oportunidad; si la pierde, la caída puede alargarse.`;
     else if (up) sc.text = `Tendencia alcista sana: lo más probable es que continúe, con altibajos normales. Riesgo principal: noticias o datos que rompan el impulso.`;
     else if (m.rsi != null && m.rsi <= 30) sc.text = `Tendencia bajista con sobreventa: es probable un rebote técnico a corto plazo, pero la tendencia no cambia hasta que recupere la media de 200 días (${f(m.sma200)}).`;
@@ -346,7 +354,8 @@
       // Solo si hay bastantes casos independientes; a 12 meses se limita para no extrapolar rachas pasadas.
       const k = calib && calib[weeks] && calib[weeks].indep >= ({ 4: 30, 13: 20, 52: 12 })[weeks] ? calib[weeks] : null;
       const lim = weeks === 52 ? 1.8 : 2.5;
-      const zl = k ? Math.max(-lim, Math.min(-0.5, k.q10)) : -z, zh = k ? Math.min(lim, Math.max(0.5, k.q90)) : z;
+      const z0 = weeks === 52 ? 1.45 : z; // a 12 meses la prueba histórica dio 75% de aciertos con 1,28: se amplía
+      const zl = k ? Math.max(-lim, Math.min(-0.5, k.q10)) : -z0, zh = k ? Math.min(lim, Math.max(0.5, k.q90)) : z0;
       const low = price * Math.exp(zl * sd), high = price * Math.exp(zh * sd);
       out.push({ weeks, label, low, mid: price, high, lowPct: low / price - 1, midPct: 0, highPct: high / price - 1, volYear: sdW * Math.sqrt(52), years: Math.round(lr.length / 52), calibrated: !!k, coverage: k ? k.coverage : null });
     }
