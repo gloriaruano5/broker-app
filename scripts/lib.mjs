@@ -32,8 +32,8 @@ async function yahoo(sym) {
     return { t, c, src: 'Yahoo' };
   }
 }
-async function nasdaq(sym, cls = 'stocks') {
-  const r = await get(`https://api.nasdaq.com/api/quote/${sym}/historical?assetclass=${cls}&fromdate=1990-01-01&limit=99999`, { Accept: 'application/json', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' });
+export async function nasdaq(sym, cls = 'stocks', from = '1990-01-01') {
+  const r = await get(`https://api.nasdaq.com/api/quote/${encodeURIComponent(sym)}/historical?assetclass=${cls}&fromdate=${from}&limit=99999`, { Accept: 'application/json', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' });
   if (r.status !== 200) return { err: 'Nasdaq ' + r.status };
   const rows = JSON.parse(r.text)?.data?.tradesTable?.rows; if (!rows?.length) return { err: 'Nasdaq vacío' };
   const pts = rows.map(x => [Date.parse(x.date) / 1000, +String(x.close).replace(/[$,]/g, '')]).filter(x => x[1] > 0).sort((a, b) => a[0] - b[0]);
