@@ -117,7 +117,7 @@
       // estar muy por encima de la media NO anticipó peores resultados; estar muy por debajo sí.
       const dist = last / m.sma200 - 1;
       if (dist > 0.35) reasons.push({ pts: 0, kind: 'y', text: `Está un ${pct(dist)} por encima de su media de 200 días. Subida muy estirada: históricamente no ha sido motivo para vender, pero las sacudidas suelen ser fuertes. Mejor no comprar de golpe.` });
-      else if (dist < -0.25) add(-0.5, `Está un ${pct(-dist)} por debajo de su media de 200 días. Aunque parezca barato, en la prueba histórica las caídas así solían continuar.`);
+      else if (dist < -0.25) reasons.push({ pts: 0, kind: 'y', text: `Está un ${pct(-dist)} por debajo de su media de 200 días. Aunque parezca barato, en la prueba histórica las caídas así no solían rebotar antes que otras: no es por sí solo motivo de compra.` });
     } else {
       reasons.push({ pts: 0, kind: 'y', text: 'Hay menos de 200 días de historial: el análisis de tendencia es limitado.' });
     }
@@ -136,15 +136,10 @@
       cats.add('rsi');
       // En la prueba histórica, un RSI muy alto fue señal de fuerza (siguió subiendo más de lo normal), no de venta,
       // y la sobreventa no fue una señal de compra fiable.
-      if (m.rsi >= 75) add(0.5, `RSI de ${m.rsi.toFixed(0)}: impulso muy fuerte. En la prueba histórica, a 3 meses solía seguir subiendo más de lo normal, aunque con sacudidas.`);
+      if (m.rsi >= 75) reasons.push({ pts: 0, kind: 'y', text: `RSI de ${m.rsi.toFixed(0)}: impulso muy fuerte. En la prueba histórica no fue señal de venta: a 3 meses solía seguir subiendo, aunque con sacudidas.` });
       else if (m.rsi >= 70) reasons.push({ pts: 0, kind: 'y', text: `RSI de ${m.rsi.toFixed(0)}: zona de sobrecompra. Históricamente no ha sido una señal de venta fiable por sí sola.` });
       else if (m.rsi <= 30) reasons.push({ pts: 0, kind: 'y', text: `RSI de ${m.rsi.toFixed(0)}: sobreventa. Puede rebotar, pero en la prueba histórica no fue una señal de compra fiable si la tendencia es bajista.` });
       else reasons.push({ pts: 0, kind: 'y', text: `RSI de ${m.rsi.toFixed(0)}: zona neutral.` });
-    }
-    if (m.ch3m != null) {
-      cats.add('impulso');
-      if (m.ch3m > 0.02) add(0.5, `Ha subido un ${pct(m.ch3m)} en 3 meses: impulso positivo (en la prueba histórica, el impulso tendía a continuar).`);
-      else if (m.ch3m < -0.02) add(-0.5, `Ha bajado un ${pct(-m.ch3m)} en 3 meses: impulso negativo.`);
     }
     if (m.fromHi < -0.3) reasons.push({ pts: 0, kind: 'y', text: `Está un ${pct(-m.fromHi)} por debajo de su máximo del último año.` });
     if (m.ch1w != null && Math.abs(m.ch1w) > 0.08)
@@ -237,7 +232,7 @@
     const plus = reasons.filter(r => r.pts > 0).reduce((a, r) => a + r.pts, 0);
     const minus = -reasons.filter(r => r.pts < 0).reduce((a, r) => a + r.pts, 0);
     const agreement = plus + minus ? Math.abs(plus - minus) / (plus + minus) : 0;
-    const possible = extra.valuation !== undefined ? 8 : 6;
+    const possible = extra.valuation !== undefined ? 7 : 5;
     const coverage = Math.min(1, cats.size / possible);
     const cScore = agreement * 0.6 + coverage * 0.4;
     const confidence = {
