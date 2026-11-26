@@ -336,11 +336,11 @@
     $('#taxBtn').onclick = () => go('renta');
     $('#jBtn').onclick = () => go('diario');
     const list = $('#list');
-    list.innerHTML = assets.map(a => `
-      <div class="asset" data-id="${esc(a.id)}">
-        <span class="dot" id="dot-${esc(a.id)}"></span>
-        <div class="grow"><div class="name">${esc(a.name)}</div><div class="small muted" id="sub-${esc(a.id)}">${esc(a.type)} · ${esc(a.yahoo)}</div></div>
-        <div class="right"><div id="px-${esc(a.id)}">…</div><div class="small" id="ch-${esc(a.id)}"></div></div>
+    list.innerHTML = `<div class="phead"><span>Activo</span><span>Valor</span><span>Desde la compra</span></div>` + assets.map(a => `
+      <div class="asset prow" data-id="${esc(a.id)}">
+        <div class="pname"><div class="name"><span class="dot" id="dot-${esc(a.id)}"></span><span class="nm">${esc(a.name)}</span></div><div class="sub" id="sub-${esc(a.id)}">${esc(a.type)} · ${esc(a.yahoo)}</div></div>
+        <div class="val" id="px-${esc(a.id)}">…</div>
+        <div class="chg" id="ch-${esc(a.id)}"></div>
       </div>`).join('');
     list.querySelectorAll('.asset').forEach(el => el.onclick = () => go('detalle', el.dataset.id));
 
@@ -355,14 +355,14 @@
         const ev = A.evaluate(d, { fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules });
         const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
         const chEl = $('#ch-' + a.id);
-        $('#sub-' + a.id).textContent = `${a.type} · ${num(sn.price * sn.fx, 2)} €${sn.ccy && sn.ccy !== 'EUR' ? ' (' + num(sn.price) + ' ' + sn.ccy + ')' : ''}`;
+        $('#sub-' + a.id).textContent = `${a.type} · ${num(sn.price * sn.fx, 2)} €`;
         if (sn.pos.qty > 0) {
           $('#px-' + a.id).textContent = eur(sn.value);
-          chEl.innerHTML = sn.eurRet != null ? esc(pctS(sn.eurRet)) + ' desde la compra' + (sn.plEur != null ? `<br><b>${sn.plEur >= 0 ? '+' : ''}${esc(eur(sn.plEur))}</b>` : '') : '';
-          chEl.className = 'small ' + cls(sn.eurRet);
+          chEl.innerHTML = sn.eurRet != null ? `<b>${esc(pctS(sn.eurRet))}</b>${sn.plEur != null ? `<span>${sn.plEur >= 0 ? '+' : ''}${esc(eur(sn.plEur))}</span>` : ''}` : '';
+          chEl.className = 'chg ' + cls(sn.eurRet);
         } else {
           $('#px-' + a.id).textContent = num(sn.price * sn.fx, 2) + ' €';
-          chEl.textContent = pctS(ch) + ' hoy'; chEl.className = 'small ' + cls(ch);
+          chEl.innerHTML = `<b>${esc(pctS(ch))}</b><span>hoy</span>`; chEl.className = 'chg ' + cls(ch);
         }
         if (sn.pos.qty > 0) {
           total += sn.value;
