@@ -2,7 +2,8 @@
 // Usa exactamente el mismo código de análisis que la app (analysis.js). Guarda un resumen en data/backtest.json
 // (solo estadísticas de los activos, nada de las posiciones de la usuaria).
 import fs from 'node:fs';
-import { DEFAULT_ASSETS, A, yahooSession, history, ctx } from './lib.mjs';
+import { DEFAULT_ASSETS, A, yahooSession, history, ctx, get } from './lib.mjs';
+const PTS = {};
 const P = ctx.window.Portfolio;
 const HIST = {};
 // Estudio de factores: qué parte de la señal ayuda de verdad (rentabilidad a 3 meses frente a la media del activo).
@@ -60,7 +61,7 @@ for (const a of DEFAULT_ASSETS) {
   if (h.err || h.c.length < 400) { lines.push(`■ ${a.name}: sin historial suficiente (${h.err || h.c.length + ' días'})`); continue; }
   h.id = a.id; HIST[a.id] = h; factorStudy(h);
   const bt = A.backtest(h, { keepPoints: true });
-  periodStats(h, bt.pts); delete bt.pts;
+  periodStats(h, bt.pts); PTS[a.id] = bt.pts; delete bt.pts;
   if (!bt) { lines.push(`■ ${a.name}: historial corto`); continue; }
   result.assets[a.id] = { src: h.src, days: h.c.length, ...bt };
   const s = bt.strategy, bb = bt.byBucket;
@@ -139,6 +140,82 @@ if (pfIds.includes('sp500') && pfIds.length >= 5) {
   lines.push(`REPARTO DE LA CARTERA (${pt.ids.length} activos: ${pt.ids.join(', ')}; ${pt.from} a ${pt.to}; desde 2022 entre corchetes):`);
   for (const [k, r] of Object.entries(pt.res)) { const r2 = pt2.res[k]; lines.push(`  ${r.label}: ${pc(r.cagr)}/año, volatilidad ${pc(r.vol)}, caída máx ${pc(r.dd)}, rentabilidad/riesgo ${r.sharpe.toFixed(2)}, ${r.trades} órdenes [${pc(r2.cagr)}/año, caída ${pc(r2.dd)}, r/r ${r2.sharpe.toFixed(2)}]`); }
   result.portfolio = { full: pt, since2022: pt2 };
+}
+// ---------- Régimen de mercado ----------
+// Mercado de referencia: S&P 500 (SPY) para todo salvo cripto, que usa Bitcoin.
+// Alcista: precio sobre su media de 200 y media de 50 sobre la de 200. Bajista: lo contrario. Si no, lateral.
+const dayS = ts => new Date(ts * 1000).toISOString().slice(0, 10);
+function regimeMap(h) {
+  const s50 = A.sma(h.c, 50), s200 = A.sma(h.c, 200), m = new Map();
+  h.t.forEach((t, i) => { if (s200[i] == null) return; const up = h.c[i] > s200[i], g = s50[i] > s200[i]; m.set(dayS(t), up && g ? 'alcista' : !up && !g ? 'bajista' : 'lateral'); });
+  return m;
+}
+function regimeAt(m, ts) { for (let k = 0; k < 7; k++) { const r = m.get(dayS(ts - k * 86400)); if (r) return r; } return null; }
+if (HIST.sp500 && HIST.btc) {
+  const RM = { stock: regimeMap(HIST.sp500), crypto: regimeMap(HIST.btc) };
+  const split = Date.parse('2022-01-01') / 1000;
+  const E = {}; const add = (k, v) => { const o = E[k] || (E[k] = [0, 0]); o[0] += v; o[1]++; };
+  const strat = { actual: [], alcistaNoSale: [], soloBajista: [] };
+  for (const [id, pts] of Object.entries(PTS)) {
+    const h = HIST[id], isC = DEFAULT_ASSETS.find(a => a.id === id).type === 'Cripto', rm = isC ? RM.crypto : RM.stock;
+    for (const per of ['a', 'b']) {
+      const P = pts.filter(p => p.f63 != null && (per === 'a' ? h.t[p.i] < split : h.t[p.i] >= split)); if (P.length < 20) continue;
+      const base = P.reduce((x, p) => x + p.f63, 0) / P.length;
+      for (const p of P) { const r = regimeAt(rm, h.t[p.i]); if (!r) continue; const g = p.score >= 0.75 ? 'fav' : p.score <= -0.75 ? 'unf' : 'neu'; add(`${r}|${g}|${per}`, p.f63 - base); add(`${r}|all|${per}`, p.f63 - base); }
+    }
+    // Estrategias: cuándo estar fuera del activo.
+    const rules = {
+      actual: (p, r) => p.score <= -0.75,
+      alcistaNoSale: (p, r) => p.score <= -0.75 && r !== 'alcista',
+      soloBajista: (p, r) => r === 'bajista'
+    };
+    for (const [k, rule] of Object.entries(rules)) {
+      let eq = 1, bh = 1, pk = 1, dd = 0, prevOut = false;
+      for (let q = 0; q < pts.length; q++) {
+        const p = pts[q], r = regimeAt(rm, h.t[p.i]), out = rule(p, r), j1 = q + 1 < pts.length ? pts[q + 1].i : h.c.length - 1;
+        if (out !== prevOut) { eq *= 0.998; prevOut = out; }
+        for (let j = p.i + 1; j <= j1; j++) { const x = h.c[j] / h.c[j - 1]; bh *= x; if (!out) eq *= x; pk = Math.max(pk, eq); dd = Math.min(dd, eq / pk - 1); }
+      }
+      const yrs = (h.t[h.t.length - 1] - h.t[pts[0].i]) / 86400 / 365.25;
+      strat[k].push({ id, cagr: Math.pow(eq, 1 / yrs) - 1, bh: Math.pow(bh, 1 / yrs) - 1, dd });
+    }
+  }
+  lines.push('');
+  lines.push('RÉGIMEN DE MERCADO (ventaja a 3 meses frente a la media del activo; antes de 2022 | desde 2022):');
+  for (const r of ['alcista', 'lateral', 'bajista']) for (const g of ['all', 'fav', 'neu', 'unf']) {
+    const a = E[`${r}|${g}|a`], b = E[`${r}|${g}|b`];
+    lines.push(`  ${r.padEnd(8)} ${({ all: 'cualquier señal', fav: 'señal favorable', neu: 'señal neutral', unf: 'señal precaución' })[g].padEnd(17)} ${a ? pc(a[0] / a[1]) + ' (n=' + a[1] + ')' : '–'} | ${b ? pc(b[0] / b[1]) + ' (n=' + b[1] + ')' : '–'}`);
+  }
+  const mean = L => L.reduce((x, y) => x + y, 0) / L.length;
+  for (const [k, L] of Object.entries(strat)) if (L.length) lines.push(`  Estrategia ${k}: ${pc(mean(L.map(x => x.cagr)))}/año de media, caída máx media ${pc(mean(L.map(x => x.dd)))}, gana a no tocar en ${L.filter(x => x.cagr > x.bh).length}/${L.length}`);
+  result.regime = { edges: Object.fromEntries(Object.entries(E).map(([k, v]) => [k, { edge: v[0] / v[1], n: v[1] }])), strategies: Object.fromEntries(Object.entries(strat).map(([k, L]) => [k, { cagr: mean(L.map(x => x.cagr)), dd: mean(L.map(x => x.dd)), wins: L.filter(x => x.cagr > x.bh).length, n: L.length }])) };
+}
+
+// ---------- Datos on-chain de cripto (CoinMetrics, comunidad gratuita): MVRV ----------
+// MVRV = valor de mercado / valor al que se movió cada moneda por última vez. Muy alto = mucha ganancia sin realizar.
+for (const [id, sym] of [['btc', 'btc'], ['eth', 'eth'], ['sol', 'sol']]) {
+  const r = await get(`https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=${sym}&metrics=CapMVRVCur&frequency=1d&page_size=10000`);
+  if (r.status !== 200) { lines.push(`MVRV ${sym}: sin datos (${r.status})`); continue; }
+  const rows = JSON.parse(r.text).data || [];
+  const mv = new Map(rows.filter(x => x.CapMVRVCur).map(x => [x.time.slice(0, 10), +x.CapMVRVCur]));
+  if (!mv.size || !HIST[id]) { lines.push(`MVRV ${sym}: ${mv.size} días`); continue; }
+  const h = HIST[id], B = {};
+  for (let i = 0; i + 63 < h.c.length; i += 5) {
+    const v = mv.get(dayS(h.t[i])); if (v == null) continue;
+    const k = v < 1 ? '<1' : v < 1.5 ? '1-1,5' : v < 2.5 ? '1,5-2,5' : v < 3.5 ? '2,5-3,5' : '>3,5';
+    const o = B[k] || (B[k] = []); o.push(h.c[i + 63] / h.c[i] - 1);
+  }
+  const all = Object.values(B).flat(), base = all.reduce((x, y) => x + y, 0) / all.length;
+  lines.push(`MVRV ${sym} (${mv.size} días; a 3 meses frente a la media ${pc(base)}): ` + ['<1', '1-1,5', '1,5-2,5', '2,5-3,5', '>3,5'].filter(k => B[k]).map(k => `${k}: ${pc(B[k].reduce((x, y) => x + y, 0) / B[k].length - base)} sube ${(B[k].filter(x => x > 0).length / B[k].length * 100).toFixed(0)}% (n=${B[k].length})`).join(' · '));
+  result.mvrv = result.mvrv || {}; result.mvrv[id] = Object.fromEntries(Object.entries(B).map(([k, L]) => [k, { edge: L.reduce((x, y) => x + y, 0) / L.length - base, up: L.filter(x => x > 0).length / L.length, n: L.length }]));
+}
+// ---------- ¿Qué fuentes de datos anticipadores responden desde aquí? ----------
+for (const [nm, url, h] of [
+  ['Nasdaq cortos NVDA', 'https://api.nasdaq.com/api/quote/NVDA/short-interest?assetClass=stocks', { Accept: 'application/json', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' }],
+  ['Nasdaq previsiones NVDA', 'https://api.nasdaq.com/api/analyst/NVDA/earnings-forecast', { Accept: 'application/json', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' }],
+  ['Nasdaq recomendaciones NVDA', 'https://api.nasdaq.com/api/analyst/NVDA/ratings', { Accept: 'application/json', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' }],
+  ['Yahoo quoteSummary', 'https://query2.finance.yahoo.com/v10/finance/quoteSummary/NVDA?modules=earningsTrend', {}]]) {
+  const r = await get(url, h); lines.push(`Fuente ${nm}: ${r.status} ${r.status === 200 ? r.text.slice(0, 300).replace(/\s+/g, ' ') : ''}`);
 }
 const text = lines.join('\n');
 console.log(text);
