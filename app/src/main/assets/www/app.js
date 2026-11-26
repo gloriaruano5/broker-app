@@ -376,7 +376,7 @@
     try {
       const snaps = (await Promise.all(assets.map(a => snapshot(a).catch(() => null)))).filter(Boolean);
       const pl = riskPlan(snaps), outN = pl ? pl.rows.filter(r => r.out).length : 0;
-      if (outN && current.name === 'cartera' && $('#alerts')) { if (!alerts.length) $('#alerts').innerHTML = ''; $('#alerts').insertAdjacentHTML('beforeend', `<div class="reason"><span class="dot y" style="display:inline-block"></span> <b>Reparto</b>: ${outN} activo(s) se han separado de su peso según riesgo. Mira «Reparto propuesto» en Riesgo.</div>`); }
+      if (outN && current.name === 'cartera' && $('#alerts')) { if (!alerts.length) $('#alerts').innerHTML = ''; $('#alerts').insertAdjacentHTML('beforeend', `<div class="reason"><span class="dot y" style="display:inline-block"></span> <b>Reparto</b>: ${outN} activo(s) se han separado bastante del reparto propuesto. Mira «Reparto propuesto» en la pestaña Riesgo.</div>`); }
     } catch (e) {}
     const chk = await dataCheck(false).catch(() => null);
     const bad = chk ? chk.items.filter(x => x.issues.length) : [];
@@ -391,14 +391,15 @@
     if (held.length < 3) return null;
     const total = held.reduce((x, s) => x + s.value, 0);
     const vols = {}, groups = {}, cur = {};
-    held.forEach(s => { vols[s.a.id] = A.volatility(s.d.c, 250) || 0.5; groups[s.a.id] = isCrypto(s.a) ? 'Cripto' : 'Otro'; cur[s.a.id] = s.value / total; });
+    const mode = settings.planMode || 'igual';
+    held.forEach(s => { vols[s.a.id] = mode === 'igual' ? 1 : A.volatility(s.d.c, 250) || 0.5; groups[s.a.id] = isCrypto(s.a) ? 'Cripto' : 'Otro'; cur[s.a.id] = s.value / total; });
     const tw = window.Portfolio.riskWeights(vols, groups, PLAN_CAPS);
     const rows = window.Portfolio.rebalancePlan(cur, tw, total).map(r => ({ ...r, name: held.find(s => s.a.id === r.id).a.name }));
     let test = '';
     const pf = btCache && btCache.portfolio;
-    if (pf && pf.full) { const q = pf.full.res, b = q.banda, z = q.quieta;
-      test = `En la prueba con ${pf.full.ids.length} de tus activos desde ${pf.full.from.slice(0, 4)}, este método dio ${pctS(b.cagr)} al año con una caída máxima de ${pctS(b.dd)}, frente a ${pctS(z.cagr)} y ${pctS(z.dd)} dejando la cartera quieta.`; }
-    return { rows, total, test };
+    if (pf && pf.full) { const q = pf.full.res, b = q[mode === 'igual' ? 'igualBanda' : 'banda'], z = q.quieta;
+      if (b) test = `En la prueba con ${pf.full.ids.length} de tus activos desde ${pf.full.from.slice(0, 4)}, este método dio ${pctS(b.cagr)} al año con una caída máxima de ${pctS(b.dd)}, frente a ${pctS(z.cagr)} y ${pctS(z.dd)} dejando la cartera quieta (antes de impuestos).`; }
+    return { rows, total, test, mode };
   }
 
   // ---------- Comprobación automática de datos (en el móvil, que sí accede a los precios) ----------
@@ -875,8 +876,9 @@
     const total = held.reduce((s, x) => s + x.value, 0);
     const plan = riskPlan(held);
     view.innerHTML = `
-      ${plan ? `<div class="card"><h2>Reparto propuesto según riesgo</h2>
-        <div class="small muted" style="margin-bottom:8px">Cada activo pesa menos cuanto más se mueve, para que ninguno domine las subidas y bajadas de la cartera. Topes: ${PLAN_CAPS.asset * 100}% por activo y ${PLAN_CAPS.groups.Cripto * 100}% entre todas las criptos. Solo se avisa cuando un activo se separa bastante (más de un 25% de su peso o 2 puntos).</div>
+      ${plan ? `<div class="card"><h2>Reparto propuesto</h2>
+        <div class="pills" style="margin-bottom:6px"><button class="pill ${plan.mode === 'igual' ? 'on' : ''}" data-pm="igual">Mismo peso</button><button class="pill ${plan.mode === 'riesgo' ? 'on' : ''}" data-pm="riesgo">Menos peso a lo que más se mueve</button></div>
+        <div class="small muted" style="margin-bottom:8px">${plan.mode === 'igual' ? 'Todos tus activos con el mismo peso: al reequilibrar vendes parte de lo que más ha subido y compras lo que se ha quedado atrás. En la prueba histórica fue lo que más rentabilidad dio.' : 'Cada activo pesa menos cuanto más se mueve, para que ninguno domine las subidas y bajadas. En la prueba histórica dio algo menos de rentabilidad, pero con caídas mucho más pequeñas.'} Topes: ${PLAN_CAPS.asset * 100}% por activo y ${PLAN_CAPS.groups.Cripto * 100}% entre todas las criptos. Solo se avisa cuando un activo se separa bastante (más de un 25% de su peso o 2 puntos).</div>
         ${plan.rows.filter(r => r.out).length ? `<div class="reason warn" style="margin-bottom:6px">${plan.rows.filter(r => r.out).length} activo(s) fuera de su banda: conviene reequilibrar.</div>` : '<div class="reason up" style="margin-bottom:6px">Tu reparto está dentro de las bandas: no hace falta tocar nada.</div>'}
         <div class="scroll"><table style="font-size:12px"><tr><th></th><th>Ahora</th><th>Prop.</th><th>Ajuste</th></tr>
         ${plan.rows.map(r => `<tr><td>${esc(r.name)}${r.out ? ' <span class="warn">●</span>' : ''}</td><td>${num(r.cw * 100, 1)}%</td><td>${num(r.tw * 100, 1)}%</td><td class="${r.out ? (r.diff > 0 ? 'up' : 'down') : 'muted'}">${r.out ? (r.diff > 0 ? '+' : '') + eur(r.eur) : '–'}</td></tr>`).join('')}
@@ -906,6 +908,7 @@
         <h3>Los que más se mueven juntos</h3>${pairs.slice(0, Math.min(5, Math.max(1, pairs.length - 3))).map(p => `<div class="reason">${esc(name(p.i))} y ${esc(name(p.j))}: <b class="${p.c > 0.7 ? 'down' : ''}">${num(p.c, 2)}</b></div>`).join('')}
         ${pairs.length >= 8 ? `<h3>Los que más diversifican</h3>${pairs.slice(-3).reverse().map(p => `<div class="reason">${esc(name(p.i))} y ${esc(name(p.j))}: <b class="up">${num(p.c, 2)}</b></div>`).join('')}` : ''}</div>` : ''}
       <div class="disclaimer">${DISCLAIMER}</div>`;
+    view.querySelectorAll('[data-pm]').forEach(b => b.onclick = () => { settings.planMode = b.dataset.pm; save('settings', settings); renderRisk(); });
   }
 
   // ---------- Vista: Agenda ----------
