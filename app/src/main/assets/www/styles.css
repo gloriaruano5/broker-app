@@ -108,6 +108,15 @@ label { font-size: 13px; color: var(--muted); }
 :root[data-theme="claro"] { --bg: #eef2f7; --card: #ffffff; --card2: #f1f5f9; --line: #d5dde8; --bar: #ffffff; --text: #0f172a; --muted: #52627a; --accent: #0b7fc4; --up: #15803d; --down: #dc2626; --warn: #b45309; --stripe: rgba(15, 23, 42, .035); }
 :root[data-theme="claro"] .chg.up { background: rgba(21, 128, 61, .12); }
 :root[data-theme="claro"] .chg.down { background: rgba(220, 38, 38, .10); }
+:root[data-theme="rosa"] { --bg: #fdeef2; --card: #fff8fa; --card2: #fbe3ea; --line: #f1c9d5; --bar: #fff8fa; --accent: #c2185b; }
+:root[data-theme="menta"] { --bg: #e8f7f0; --card: #f8fffb; --card2: #dcf1e7; --line: #bfe3d1; --bar: #f8fffb; --accent: #0f8a63; }
+:root[data-theme="celeste"] { --bg: #e7f3fc; --card: #f9fcff; --card2: #dbecf9; --line: #bcd9f0; --bar: #f9fcff; --accent: #0b7fc4; }
+:root[data-theme="lavanda"] { --bg: #f1edfb; --card: #fcfaff; --card2: #e7e0f7; --line: #d0c4ee; --bar: #fcfaff; --accent: #6d4bd1; }
+:root[data-theme="crema"] { --bg: #fbf5e9; --card: #fffdf8; --card2: #f4ebd8; --line: #e5d6b8; --bar: #fffdf8; --accent: #b86b0b; }
+:root[data-theme="claro"], :root[data-theme="rosa"], :root[data-theme="menta"], :root[data-theme="celeste"], :root[data-theme="lavanda"], :root[data-theme="crema"] { --text: #1e2533; --muted: #5a6476; --up: #15803d; --down: #dc2626; --warn: #b45309; --stripe: rgba(15, 23, 42, .035); }
+:root[data-theme="rosa"] .chg.up, :root[data-theme="menta"] .chg.up, :root[data-theme="celeste"] .chg.up, :root[data-theme="lavanda"] .chg.up, :root[data-theme="crema"] .chg.up { background: rgba(21, 128, 61, .12); }
+:root[data-theme="rosa"] .chg.down, :root[data-theme="menta"] .chg.down, :root[data-theme="celeste"] .chg.down, :root[data-theme="lavanda"] .chg.down, :root[data-theme="crema"] .chg.down { background: rgba(220, 38, 38, .10); }
+:root[data-theme="claro"] .btn:not(.sec):not(.danger), :root[data-theme="rosa"] .btn:not(.sec):not(.danger), :root[data-theme="menta"] .btn:not(.sec):not(.danger), :root[data-theme="celeste"] .btn:not(.sec):not(.danger), :root[data-theme="lavanda"] .btn:not(.sec):not(.danger), :root[data-theme="crema"] .btn:not(.sec):not(.danger) { color: #fff; }
 .themes { display: flex; flex-wrap: wrap; gap: 10px; }
 .themes button { width: 74px; border: 2px solid var(--line); border-radius: 12px; padding: 6px 0 4px; background: none; color: var(--text); font-size: 11px; }
 .themes button i { display: block; width: 36px; height: 36px; margin: 0 auto 4px; border-radius: 50%; border: 1px solid rgba(128, 128, 128, .5); }

@@ -23,7 +23,7 @@
     save('assets', assets);
   }
   let settings = Object.assign({ dataRepo: 'gloriaruano5/broker-app', branch: 'main' }, load('settings', {}));
-  const THEMES_BG = [['', 'Azul noche', '#0b1220'], ['negro', 'Negro', '#000000'], ['turquesa', 'Turquesa', '#0b3a42'], ['morado', 'Morado', '#251847'], ['verde', 'Verde', '#112c21'], ['claro', 'Claro', '#eef2f7']];
+  const THEMES_BG = [['', 'Azul noche', '#0b1220'], ['negro', 'Negro', '#000000'], ['turquesa', 'Turquesa', '#0b3a42'], ['morado', 'Morado', '#251847'], ['verde', 'Verde', '#112c21'], ['claro', 'Claro', '#eef2f7'], ['rosa', 'Rosa', '#fdeef2'], ['menta', 'Menta', '#e8f7f0'], ['celeste', 'Celeste', '#e7f3fc'], ['lavanda', 'Lavanda', '#f1edfb'], ['crema', 'Crema', '#fbf5e9']];
   function applyTheme() { if (settings.theme) document.documentElement.dataset.theme = settings.theme; else delete document.documentElement.dataset.theme; }
   applyTheme();
   const persist = () => { save('assets', assets); syncNotif(); };
