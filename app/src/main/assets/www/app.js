@@ -488,10 +488,10 @@
         ${watch.length ? `<h3>Qué vigilar</h3>${watch.map(x => `<div class="reason small">👁 ${esc(x)}</div>`).join('')}` : ''}
         <div class="small muted" style="margin-top:8px">Ningún análisis acierta siempre: esto son probabilidades a partir de los datos de hoy, y cambian cuando cambian los datos. Úsalo para no decidir por impulso, no como garantía.</div></div>
       ${ranges ? `<div class="card"><h2>Hasta dónde podría llegar</h2>
-        <div class="small muted" style="margin-bottom:8px">Según cómo se ha movido ${esc(a.name)} en los últimos ${ranges[0].years} años: 8 de cada 10 veces terminó dentro de este rango. 1 de cada 10 acabó por debajo y otra por encima.</div>
+        <div class="small muted" style="margin-bottom:8px">Según lo que se mueve ${esc(a.name)} (volatilidad de los últimos ${ranges[0].years} años: ${num(ranges[0].volYear * 100, 0)}% al año), hay unas 8 posibilidades de 10 de que el precio esté dentro de este rango. No supone que vaya a subir ni a bajar: para eso mira la orientación de arriba.</div>
         ${ranges.map(r => { const lo = r.low * fxR, hi = r.high * fxR, mid = r.mid * fxR, now = m.last * fxR;
           const span = hi - lo || 1, pNow = Math.max(0, Math.min(100, (now - lo) / span * 100));
-          return `<div style="margin:12px 0"><div class="row small"><b class="grow">En ${r.label}</b><span class="muted">lo típico ${num(mid, 2)} ${curR} (${pctS(r.midPct)})</span></div>
+          return `<div style="margin:12px 0"><div class="row small"><b class="grow">En ${r.label}</b><span class="muted">hoy ${num(now, 2)} ${curR}</span></div>
             <div style="position:relative;height:10px;border-radius:6px;margin:8px 0 4px;background:linear-gradient(90deg,var(--down),var(--card2) ${pNow.toFixed(0)}%,var(--up))">
               <div style="position:absolute;top:-4px;left:calc(${pNow.toFixed(1)}% - 2px);width:4px;height:18px;background:#fff;border-radius:2px"></div></div>
             <div class="row small" style="justify-content:space-between"><span class="down">▼ ${num(lo, 2)} ${curR} (${pctS(r.lowPct)})</span><span class="up">${num(hi, 2)} ${curR} (${pctS(r.highPct)}) ▲</span></div></div>`; }).join('')}

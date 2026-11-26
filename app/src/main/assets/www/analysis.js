@@ -325,24 +325,27 @@
   }
 
   /**
-   * Rango probable de precio a 1, 3 y 12 meses: cómo se movió de verdad este activo en periodos así
-   * durante los últimos 10 años (percentiles 10, 50 y 90), aplicado al precio de hoy.
+   * Rango probable de precio a 1, 3 y 12 meses a partir de su volatilidad real (no de su subida pasada):
+   * se mide cuánto se mueve semana a semana en los últimos 3 años y se proyecta sin suponer que sube ni que baja.
+   * 80% de probabilidad de terminar dentro del rango si el comportamiento se parece al de estos años.
    */
   function priceRanges(w, price) {
     const c = w && w.c;
-    if (!c || c.length < 60) return null;
-    const start = Math.max(0, c.length - 520);
+    if (!c || c.length < 30 || !(price > 0)) return null;
+    const start = Math.max(1, c.length - 156);
+    const lr = [];
+    for (let i = start; i < c.length; i++) if (c[i] > 0 && c[i - 1] > 0) lr.push(Math.max(-0.7, Math.min(0.7, Math.log(c[i] / c[i - 1]))));
+    if (lr.length < 26) return null;
+    const m = lr.reduce((x, y) => x + y, 0) / lr.length;
+    const sdW = Math.sqrt(lr.reduce((x, y) => x + (y - m) ** 2, 0) / (lr.length - 1));
+    const z = 1.2816; // percentiles 10 y 90
     const out = [];
     for (const [weeks, label] of [[4, '1 mes'], [13, '3 meses'], [52, '12 meses']]) {
-      const r = [];
-      for (let i = start; i + weeks < c.length; i++) r.push(c[i + weeks] / c[i] - 1);
-      if (r.length < 20) continue;
-      r.sort((a, b) => a - b);
-      const q = p => r[Math.min(r.length - 1, Math.floor(p * r.length))];
-      out.push({ weeks, label, n: r.length, low: price * (1 + q(0.1)), mid: price * (1 + q(0.5)), high: price * (1 + q(0.9)),
-        lowPct: q(0.1), midPct: q(0.5), highPct: q(0.9), years: Math.round((c.length - start) / 52) });
+      const sd = sdW * Math.sqrt(weeks);
+      const low = price * Math.exp(-z * sd), high = price * Math.exp(z * sd);
+      out.push({ weeks, label, low, mid: price, high, lowPct: low / price - 1, midPct: 0, highPct: high / price - 1, volYear: sdW * Math.sqrt(52), years: Math.round(lr.length / 52) });
     }
-    return out.length ? out : null;
+    return out;
   }
 
   const api = { priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
