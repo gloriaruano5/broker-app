@@ -182,6 +182,23 @@
         earnings: ed, sector: ap.sector, country: ap.country, targetPrice: raw(fd.targetMeanPrice), recommendation: fd.recommendationKey };
     });
   }
+  // Eventos que pueden mover mucho el precio (se actualizan desde el repositorio sin instalar otra versión).
+  async function keyEvents() {
+    const remote = await cached('events:' + settings.dataRepo, 360, async () => {
+      const r = await http(`https://raw.githubusercontent.com/${settings.dataRepo}/${settings.branch}/data/eventos.json`);
+      if (r.status !== 200) throw new Error('sin eventos');
+      return JSON.parse(r.text).events;
+    }).catch(() => null);
+    return remote || (window.MACRO_EVENTS || []).map(([date, title]) => ({ date, title, type: 'banco', impact: title.startsWith('Fed') ? 'alto' : 'medio', themes: ['todos'] }));
+  }
+  const EVENT_TIPS = {
+    banco: 'Suele mover bolsa, oro, dólar y cripto ese día y el siguiente. A largo plazo no hace falta vender antes; si pensabas comprar, esperar a conocer la decisión evita comprar justo antes de un salto.',
+    resultados: 'El precio puede moverse un 5-15% en un día tras los resultados. Si esta posición pesa mucho o acumula mucha ganancia, puedes reducir algo antes; si quieres comprar, suele ser más prudente esperar a ver los resultados.',
+    elecciones: 'Las semanas previas suele haber más volatilidad. Históricamente el mercado se calma cuando se conoce el resultado; evita decisiones bruscas justo antes.',
+    politica: 'Puede traer anuncios de estímulos o restricciones que muevan mucho a los activos afectados. Vigila las noticias de esos días.',
+    vencimientos: 'Día de mucho volumen y movimientos raros que suelen corregirse en días siguientes. No conviene operar ese día por impulso.'
+  };
+  const eventAffects = (e, a) => (e.themes || []).includes('todos') || (e.themes || []).some(t => (a.themes || []).includes(t));
   const isCrypto = a => a.type === 'Cripto';
   const metaOf = a => Object.assign({ sector: a.type, country: 'Otro', fx: '' }, (window.ASSET_META || {})[a.id], a.meta || {});
 
@@ -318,6 +335,13 @@
         (Math.abs(fxSum) >= 1 ? `<div class="muted">De eso, el efecto de la moneda es <span class="${cls(fxSum)}">${fxSum >= 0 ? '+' : ''}${eur(fxSum)}</span> (solo en los activos con el importe pagado en euros).</div>` : '');
     } else $('#totalPl').innerHTML = '<span class="muted">Toca un activo, entra en «Mi posición» y apunta tus compras.</span>';
     if (missing) $('#totalPl').innerHTML += `<div class="warn">${missing} activo(s) sin datos. Revisa su símbolo en Ajustes.</div>`;
+    const soon = (await keyEvents()).filter(e => { const dd = (Date.parse(e.date + 'T12:00:00') - Date.now()) / 86400000; return dd > -1 && dd <= 10; });
+    soon.forEach(e => {
+      const aff = assets.filter(a => window.Portfolio.position(a).qty > 0 && eventAffects(e, a));
+      if (!aff.length) return;
+      const dd = Math.round((Date.parse(e.date + 'T12:00:00') - Date.now()) / 86400000);
+      alerts.push({ a: { name: dd <= 0 ? 'Hoy' : `En ${dd} días` }, kind: e.impact === 'alto' ? 'r' : 'y', text: `${e.title}${e.themes.includes('todos') ? ' (afecta a toda la cartera)' : ' (afecta a ' + aff.map(x => x.name).join(', ') + ')'}. Mira la Agenda.` });
+    });
     const order = { r: 0, g: 1, y: 2 };
     alerts.sort((x, y) => order[x.kind] - order[y.kind]);
     $('#alerts').innerHTML = alerts.length
@@ -432,8 +456,9 @@
     const ys = extra.summary;
     if (ys && ys.earnings && ys.earnings[0]) watch.push(`Resultados el ${new Date(ys.earnings[0] * 1000).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`);
     else if (extra.sec && a.sec && extra.sec.assets[a.sec] && extra.sec.assets[a.sec].nextReport && extra.sec.assets[a.sec].nextReport.estimate >= today) watch.push(`Resultados hacia el ${new Date(extra.sec.assets[a.sec].nextReport.estimate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })} (estimado)`);
-    const macro = (window.MACRO_EVENTS || []).filter(e => e[0] >= today && e[1].includes('decisión')).slice(0, 2);
-    macro.forEach(e => watch.push(`${e[1]} el ${new Date(e[0] + 'T12:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`));
+    const lim = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+    (await keyEvents()).filter(e => e.date >= today && e.date <= lim && eventAffects(e, a)).slice(0, 4)
+      .forEach(e => watch.push(`${e.title} el ${new Date(e.date + 'T12:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}${e.approx ? ' (aprox.)' : ''}`));
     if (sc.levels.sma200) watch.push(`Si pierde o recupera ${num(sc.levels.sma200)} ${ccy} (media de 200 días)`);
     const pos = (ev.bar + 1) / 2 * 100;
     const dots = { Alta: 3, Media: 2, Baja: 1 }[ev.confidence.level];
@@ -816,10 +841,33 @@
       }
     }));
     if (current.name !== 'agenda') return;
+    const kev = await keyEvents();
+    const held = assets.filter(a => window.Portfolio.position(a).qty > 0);
+    const big = kev.filter(e => e.date >= today && e.date <= new Date(Date.now() + 760 * 86400000).toISOString().slice(0, 10))
+      .concat(ev.filter(e => e.kind === 'res' && e.a && window.Portfolio.position(e.a).qty > 0 && e.date >= today && e.date <= new Date(Date.now() + 75 * 86400000).toISOString().slice(0, 10))
+        .map(e => ({ date: e.date, title: e.label, type: 'resultados', impact: 'alto', approx: e.est, only: e.a })))
+      .sort((x, y) => x.date.localeCompare(y.date));
+    const near = new Date(Date.now() + 120 * 86400000).toISOString().slice(0, 10);
+    const chosen = big.filter(e => e.date <= near).slice(0, 8).concat(big.filter(e => e.date > near && (e.type === 'elecciones' || e.type === 'politica')));
+    const tipSeen = new Set();
+    const keyHtml = chosen.map(e => {
+      const tip = tipSeen.has(e.type) ? '' : EVENT_TIPS[e.type] || ''; tipSeen.add(e.type);
+      const dt = new Date(e.date + 'T12:00:00');
+      const days = Math.round((dt - Date.now()) / 86400000);
+      const aff = e.only ? [e.only] : held.filter(a => eventAffects(e, a));
+      const affText = (e.themes || []).includes('todos') && !e.only ? 'toda tu cartera' : aff.map(a => a.name).join(', ') || 'ningún activo que tengas ahora';
+      return `<div class="signal ${e.impact === 'alto' ? 'r' : 'y'}" style="margin-bottom:8px">
+        <div class="row"><b class="grow">${esc(e.title)}</b><span class="badge">${e.impact === 'alto' ? 'impacto alto' : 'impacto medio'}</span></div>
+        <div class="small">${dt.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}${e.approx ? ' (aprox.)' : ''} · <b>${days <= 0 ? 'hoy' : days < 60 ? 'en ' + days + ' días' : 'en ' + Math.round(days / 30) + ' meses'}</b></div>
+        <div class="small muted" style="margin-top:4px">Afecta a: ${esc(affText)}</div>
+        ${tip ? `<div class="small" style="margin-top:4px">💡 ${esc(tip)}</div>` : ''}</div>`;
+    }).join('');
     const up = ev.filter(e => e.date >= today && e.date <= limit).sort((x, y) => x.date.localeCompare(y.date));
     const icon = { macro: '🏦', res: '📊', div: '💶' };
     let lastMonth = '';
-    view.innerHTML = `<div class="card"><h2>Próximos 6 meses</h2>
+    view.innerHTML = `<div class="card"><h2>⚠️ Eventos clave que pueden mover mucho el precio</h2>${keyHtml || '<div class="muted">Ninguno próximo.</div>'}
+      <div class="small muted">Para invertir a largo plazo, lo normal es no vender por un evento concreto, sino evitar comprar justo antes y no tener demasiado peso en un solo activo. La lista se actualiza sin instalar versiones nuevas.</div></div>
+      <div class="card"><h2>Calendario completo (6 meses)</h2>
       ${up.map(e => {
         const dt = new Date(e.date + 'T12:00:00');
         const month = dt.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });

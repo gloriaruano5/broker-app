@@ -1,0 +1,33 @@
+{
+  "updated": "2026-11-26",
+  "note": "Eventos que pueden mover mucho el precio. 'approx': fecha aproximada. 'themes': temas de la app a los que afecta ('todos' = toda la cartera).",
+  "events": [
+    {"date": "2026-12-09", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos y nuevas previsiones", "themes": ["todos"]},
+    {"date": "2026-12-17", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2026-12-18", "type": "vencimientos", "impact": "medio", "title": "Cuádruple hora bruja: vencen futuros y opciones en EE. UU.", "themes": ["fed", "ia", "chips"]},
+    {"date": "2026-12-18", "type": "banco", "impact": "medio", "approx": true, "title": "Banco de Japón: decisión de tipos", "themes": ["japon"]},
+    {"date": "2027-01-13", "type": "resultados", "impact": "medio", "approx": true, "title": "Empieza la temporada de resultados del 4º trimestre en EE. UU.", "themes": ["todos"]},
+    {"date": "2027-01-27", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-02-04", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-03-05", "type": "politica", "impact": "medio", "approx": true, "title": "China: Asamblea Popular Nacional (objetivos de crecimiento y estímulos)", "themes": ["china", "cobre", "tierras"]},
+    {"date": "2027-03-17", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos y nuevas previsiones", "themes": ["todos"]},
+    {"date": "2027-03-18", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-03-19", "type": "vencimientos", "impact": "medio", "title": "Cuádruple hora bruja", "themes": ["fed", "ia", "chips"]},
+    {"date": "2027-04-28", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-04-29", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-06-09", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos y nuevas previsiones", "themes": ["todos"]},
+    {"date": "2027-06-10", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-06-18", "type": "vencimientos", "impact": "medio", "title": "Cuádruple hora bruja", "themes": ["fed", "ia", "chips"]},
+    {"date": "2027-07-22", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-07-28", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-08-26", "type": "banco", "impact": "medio", "approx": true, "title": "Simposio de Jackson Hole (discurso del presidente de la Fed)", "themes": ["todos"]},
+    {"date": "2027-09-09", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-09-15", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos y nuevas previsiones", "themes": ["todos"]},
+    {"date": "2027-09-17", "type": "vencimientos", "impact": "medio", "title": "Cuádruple hora bruja", "themes": ["fed", "ia", "chips"]},
+    {"date": "2027-10-28", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-11-17", "type": "banco", "impact": "alto", "title": "Fed: decisión de tipos", "themes": ["todos"]},
+    {"date": "2027-12-16", "type": "banco", "impact": "medio", "title": "BCE: decisión de tipos", "themes": ["todos"]},
+    {"date": "2028-01-13", "type": "elecciones", "impact": "alto", "approx": true, "title": "Elecciones presidenciales en Taiwán", "themes": ["taiwan", "chips", "china"]},
+    {"date": "2028-11-07", "type": "elecciones", "impact": "alto", "title": "Elecciones presidenciales de EE. UU.", "themes": ["todos"]}
+  ]
+}
