@@ -421,7 +421,7 @@
   function backtestVerdict(bt, score) {
     if (!bt || !bt.base.n) return null;
     const b = bucketOf(score), s = bt.byBucket[b], name = BUCKETS.find(x => x[0] === b)[1];
-    if (!s || s.n < 8) return { b, name, text: `En su historial casi nunca ha dado la señal «${name}» (${s ? s.n : 0} veces), así que no hay datos para medir su fiabilidad.`, weak: true };
+    if (!s || s.n < 8 || s.indep < 5) return { b, name, text: `En su historial hay muy pocos casos con la señal «${name}» (${s ? s.n : 0} semanas, unos ${s ? s.indep : 0} periodos de 3 meses independientes), así que todavía no se puede medir si funciona en este activo.`, weak: false };
     const edge = s.avg - bt.base.avg;
     const fav = b === 'buy' || b === 'acc', unf = b === 'caut' || b === 'sell';
     const worked = fav ? edge > 0.01 : unf ? edge < -0.01 : true;

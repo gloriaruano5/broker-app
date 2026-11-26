@@ -163,6 +163,25 @@
       return JSON.parse(r.text);
     }).catch(() => null);
   }
+  // Prueba histórica: resultados calculados cada semana en GitHub con datos reales; si falta el activo, se calcula aquí.
+  async function backtestData() {
+    return cached('bt:' + settings.dataRepo, 360, async () => {
+      const r = await http(`https://raw.githubusercontent.com/${settings.dataRepo}/${settings.branch}/data/backtest.json`);
+      if (r.status !== 200) return null;
+      return JSON.parse(r.text);
+    }).catch(() => null);
+  }
+  async function assetBacktest(a) {
+    const all = await backtestData();
+    if (all && all.assets && all.assets[a.id]) return { ...all.assets[a.id], updated: all.updated };
+    const key = 'btl:' + a.id + ':' + a.yahoo, old = load(key, null);
+    if (old && Date.now() - old.at < 7 * 86400e3) return old.v;
+    const h = await yahoo(a.yahoo, 'max', '1d').catch(() => null);
+    const bt = h && h.c.length >= 400 ? A.backtest(h) : null;
+    if (bt) { bt.src = 'calculado en el móvil'; save(key, { at: Date.now(), v: bt }); }
+    return bt;
+  }
+
   // Datos de Yahoo que necesitan "crumb" (PER, fechas de resultados, dividendos). Si fallan, se usa lo de la SEC.
   let crumbP = null;
   function yahooCrumb() {
@@ -378,7 +397,8 @@
           if (d.c.length < 100) it.issues.push(`solo ${d.c.length} días de historial`);
           if (d.meta.prev && Math.abs(price / d.meta.prev - 1) > 0.25) it.issues.push(`variación de hoy extraña (${pctS(price / d.meta.prev - 1)})`);
           const w = await yahoo(a.yahoo, 'max', '1wk').catch(() => null);
-          const rg = w ? A.priceRanges(w, price) : null;
+          const btA = await assetBacktest(a).catch(() => null);
+          const rg = w ? A.priceRanges(w, price, btA && btA.calib) : null;
           if (!rg) it.issues.push('no se pudo calcular hasta dónde podría llegar');
           else {
             it.range = [rg[2].lowPct, rg[2].highPct];
@@ -498,7 +518,11 @@
     const odds = w ? A.historicalOdds(w) : null;
     const fxR = await fxToEur(d.meta.currency).catch(() => null) || 1;
     const curR = fxR !== 1 || d.meta.currency === 'EUR' ? '€' : (d.meta.currency || '');
-    const ranges = w ? A.priceRanges(w, d.meta.price || d.c[d.c.length - 1]) : null;
+    const bt = await assetBacktest(a).catch(() => null);
+    const ranges = w ? A.priceRanges(w, d.meta.price || d.c[d.c.length - 1], bt && bt.calib) : null;
+    const techScore = A.evaluate(d).score; // la parte que se puede comprobar con el pasado
+    const verdict = bt ? A.backtestVerdict(bt, techScore) : null;
+    if (verdict && verdict.weak && ev.confidence.level !== 'Baja') { ev.confidence.level = ev.confidence.level === 'Alta' ? 'Media' : 'Baja'; ev.confidence.text += ' Se baja un nivel porque en la prueba histórica esta señal no funcionó bien en este activo.'; }
     const sc = ev.scenario;
     const ccy = d.meta.currency || '';
     const today = new Date().toISOString().slice(0, 10);
@@ -520,6 +544,15 @@
         <div class="row small muted" style="justify-content:space-between"><span>Vender</span><span>Reducir</span><span>Mantener</span><span>Acumular</span><span>Comprar</span></div>
         <div class="small" style="margin-top:10px">Confianza: <b>${'●'.repeat(dots)}${'○'.repeat(3 - dots)} ${ev.confidence.level.toLowerCase()}</b> · ${esc(ev.confidence.text)}</div>
         <div class="small" style="margin-top:6px">${esc(ev.why)}</div></div>
+      ${bt ? (() => { const st = bt.strategy, yr = new Date(st.from * 1000).getFullYear();
+        const cov = bt.calib && bt.calib[13] ? bt.calib[13].coverage : null;
+        return `<div class="card"><h2>¿Ha funcionado antes?</h2>
+        ${verdict ? `<div class="small ${verdict.weak ? 'warn' : ''}">${esc(verdict.text)}</div>` : ''}
+        <h3>Si hubieras seguido la señal desde ${yr}</h3>
+        <div class="kv"><div><span>Saliendo en «Precaución» y volviendo después</span><b class="${cls(st.cagr)}">${pctS(st.cagr)} al año</b></div><div><span>Comprar y no tocar</span><b class="${cls(st.bhCagr)}">${pctS(st.bhCagr)} al año</b></div>
+        <div><span>Peor caída siguiendo la señal</span><b class="down">${pctS(st.dd)}</b></div><div><span>Peor caída sin tocar</span><b class="down">${pctS(st.bhDd)}</b></div></div>
+        <div class="small muted" style="margin-top:6px">${st.cagr > st.bhCagr ? 'Aquí la señal ganó a no hacer nada' : 'Aquí la señal ganó menos que no hacer nada'}${st.dd > st.bhDd ? ', pero con caídas más pequeñas' : ''}. Antes de impuestos y comisiones (se cuenta un 0,2% por operación). ${cov != null ? `Los rangos de 3 meses acertaron el ${(cov * 100).toFixed(0)}% de las veces (objetivo: 80%).` : ''}
+        Solo se puede comprobar la parte técnica (precio, medias, RSI): las noticias y el sentimiento de entonces no están guardados. Datos: ${esc(bt.src || '')}${bt.updated ? ', revisado el ' + esc(bt.updated) : ''}. Lo que funcionó en el pasado puede dejar de funcionar.</div></div>`; })() : ''}
       <div class="card"><h2>Lo más probable</h2>
         <div>${esc(sc.text)}</div>
         ${odds ? `<h3>Qué pasó antes en situaciones parecidas</h3><div class="small">${esc(odds.text)}</div>
@@ -534,7 +567,7 @@
         ${watch.length ? `<h3>Qué vigilar</h3>${watch.map(x => `<div class="reason small">👁 ${esc(x)}</div>`).join('')}` : ''}
         <div class="small muted" style="margin-top:8px">Ningún análisis acierta siempre: esto son probabilidades a partir de los datos de hoy, y cambian cuando cambian los datos. Úsalo para no decidir por impulso, no como garantía.</div></div>
       ${ranges ? `<div class="card"><h2>Hasta dónde podría llegar</h2>
-        <div class="small muted" style="margin-bottom:8px">Según lo que se mueve ${esc(a.name)} (volatilidad de los últimos ${ranges[0].years} años: ${num(ranges[0].volYear * 100, 0)}% al año), hay unas 8 posibilidades de 10 de que el precio esté dentro de este rango. No supone que vaya a subir ni a bajar: para eso mira la orientación de arriba.</div>
+        <div class="small muted" style="margin-bottom:8px">Según lo que se mueve ${esc(a.name)} (volatilidad de los últimos ${ranges[0].years} años: ${num(ranges[0].volYear * 100, 0)}% al año), hay unas 8 posibilidades de 10 de que el precio esté dentro de este rango.${ranges[1].calibrated ? ' Rango ajustado con lo que pasó de verdad en su historial.' : ''} No supone que vaya a subir ni a bajar: para eso mira la orientación de arriba.</div>
         ${ranges.map(r => { const lo = r.low * fxR, hi = r.high * fxR, mid = r.mid * fxR, now = m.last * fxR;
           const span = hi - lo || 1, pNow = Math.max(0, Math.min(100, (now - lo) / span * 100));
           return `<div style="margin:12px 0"><div class="row small"><b class="grow">En ${r.label}</b><span class="muted">hoy ${num(now, 2)} ${curR}</span></div>
@@ -1014,6 +1047,9 @@
         (bad.length ? `<span class="warn">${bad.length} con problemas:</span><br>` + bad.map(x => `<b>${esc(x.name)}</b>: ${esc(x.issues.join('; '))}`).join('<br>') : `<span class="up">Los ${r.items.length} activos están bien.</span>`) +
         `<details style="margin-top:6px"><summary style="color:var(--accent)">Ver detalle</summary>${r.items.map(x => `${esc(x.name)}: ${x.price ? num(x.price) + ' ' + esc(x.ccy || '') : '–'} · desde ${x.since ? dateS(x.since) : '–'} · 12 meses ${x.range ? pctS(x.range[0]) + ' / ' + pctS(x.range[1]) : '–'}`).join('<br>')}</details>`; };
     showChk(load('dataCheck', null));
+    backtestData().then(bt => { const el = $('#chkBox'); if (!bt || !bt.validation || !el) return;
+      const v = bt.validation, f = k => v[k] ? pctS(v[k].edge) : '–', c = bt.summary && bt.summary.coverage || {};
+      el.insertAdjacentHTML('afterend', `<div class="small muted" style="margin-top:8px"><b>Prueba histórica</b> (${esc(bt.updated)}, ${Object.keys(bt.assets).length} activos): 3 meses después de una señal favorable, el activo rindió ${f('fava')} frente a su media antes de 2022 y ${f('favb')} desde 2022; tras «Precaución», ${f('unfa')} y ${f('unfb')}. Los rangos acertaron el ${c[4] ? (c[4] * 100).toFixed(0) : '–'}% a 1 mes, ${c[13] ? (c[13] * 100).toFixed(0) : '–'}% a 3 meses y ${c[52] ? (c[52] * 100).toFixed(0) : '–'}% a 12 meses (objetivo 80%). La ventaja es pequeña: sirve más para evitar caídas que para acertar subidas.</div>`); });
     $('#chkBtn').onclick = async () => { $('#chkBox').textContent = 'Comprobando los ' + assets.length + ' activos…'; showChk(await dataCheck(true).catch(() => null)); };
     $('#expBtn').onclick = () => { $('#backup').value = JSON.stringify({ assets, settings }); $('#backup').select(); };
     $('#impBtn').onclick = () => { try { const j = JSON.parse($('#backup').value);
