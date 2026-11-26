@@ -290,13 +290,20 @@
         const ch = d.meta.prev ? sn.price / d.meta.prev - 1 : null;
         const ev = A.evaluate(d, { fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules });
         const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
-        $('#px-' + a.id).textContent = num(sn.price) + ' ' + (sn.ccy || '');
-        const chEl = $('#ch-' + a.id); chEl.textContent = pctS(ch) + ' hoy'; chEl.className = 'small ' + cls(ch);
+        const chEl = $('#ch-' + a.id);
+        $('#sub-' + a.id).textContent = `${a.type} · ${num(sn.price * sn.fx, 2)} €${sn.ccy && sn.ccy !== 'EUR' ? ' (' + num(sn.price) + ' ' + sn.ccy + ')' : ''}`;
+        if (sn.pos.qty > 0) {
+          $('#px-' + a.id).textContent = eur(sn.value);
+          chEl.textContent = sn.eurRet != null ? pctS(sn.eurRet) + ' desde la compra' : '';
+          chEl.className = 'small ' + cls(sn.eurRet);
+        } else {
+          $('#px-' + a.id).textContent = num(sn.price * sn.fx, 2) + ' €';
+          chEl.textContent = pctS(ch) + ' hoy'; chEl.className = 'small ' + cls(ch);
+        }
         if (sn.pos.qty > 0) {
           total += sn.value;
           if (sn.plEur != null) { plSum += sn.plEur; invested += sn.value - sn.plEur; }
           if (sn.fxEffect != null) fxSum += sn.fxEffect * (sn.value - sn.plEur);
-          $('#sub-' + a.id).innerHTML = `${eur(sn.value)}${sn.eurRet != null ? ` · <span class="${cls(sn.eurRet)}">${pctS(sn.eurRet)}</span>` : ''}`;
         }
         ev.alerts.forEach(x => alerts.push({ a, ...x }));
       } catch (e) {
@@ -326,7 +333,8 @@
     $('#title').textContent = a.name;
     view.innerHTML = `
       <div class="card"><div class="row"><div class="grow"><div class="muted small">${esc(a.type)} · ${esc(a.yahoo)}${a.sec ? ' · SEC ' + esc(a.sec) : ''}</div>
-        <div class="big" id="dPx">…</div><div id="dCh" class="small"></div></div></div>
+        <div class="big" id="dPx">…</div><div id="dCh" style="font-size:16px;font-weight:600"></div></div></div>
+        <div class="pills" id="perPills" style="margin-top:8px"></div>
         ${a.note ? `<div class="small warn" style="margin-top:6px">${esc(a.note)}</div>` : ''}</div>
       <div class="pills">${DETAIL_TABS.map(([k, l]) => `<button class="pill ${k === tab ? 'on' : ''}" data-t="${k}">${l}</button>`).join('')}</div>
       <div id="tabBody"><div class="loading">Cargando…</div></div>`;
@@ -334,9 +342,9 @@
     let d;
     try { d = await daily(a); } catch (e) { $('#tabBody').innerHTML = `<div class="card warn">No hay datos de precio para «${esc(a.yahoo)}». Cambia el símbolo en Mi posición.</div>`; if (tab === 'posicion') renderPosition(a, null); return; }
     const price = d.meta.price || d.c[d.c.length - 1];
-    $('#dPx').textContent = num(price) + ' ' + (d.meta.currency || '');
-    const ch = d.meta.prev ? price / d.meta.prev - 1 : null;
-    $('#dCh').innerHTML = `<span class="${cls(ch)}">${pctS(ch)} hoy</span> <span class="muted">· ${esc(d.meta.exchange || '')}</span>`;
+    const fxNow = await fxToEur(d.meta.currency).catch(() => null);
+    $('#dPx').innerHTML = fxNow ? `${num(price * fxNow, 2)} €${d.meta.currency && d.meta.currency !== 'EUR' ? ` <span class="small muted" style="font-weight:400">${num(price)} ${esc(d.meta.currency)}</span>` : ''}` : num(price) + ' ' + esc(d.meta.currency || '');
+    showPeriod(a, d, price, current.period || 'hoy');
     const body = $('#tabBody');
     try {
       if (tab === 'analisis') await tabAnalysis(a, d, body);
@@ -347,6 +355,35 @@
       if (tab === 'fondos') await tabFunds(a, body);
       if (tab === 'posicion') renderPosition(a, d);
     } catch (e) { body.innerHTML = `<div class="card warn">Error: ${esc(e.message)}</div>`; }
+  }
+
+  // Variación del precio en el intervalo elegido (hoy, 1 semana… o todo el historial).
+  const PERIODS = [['hoy', 'Hoy', 1], ['1s', '1S', 7], ['1m', '1M', 30], ['3m', '3M', 91], ['6m', '6M', 182], ['1a', '1A', 365], ['5a', '5A', 1826], ['max', 'Todo', 0], ['compra', 'Desde compra', -1]];
+  async function showPeriod(a, d, price, key) {
+    const pos = window.Portfolio.position(a);
+    const list = PERIODS.filter(p => p[0] !== 'compra' || pos.avg > 0);
+    const pills = $('#perPills'); if (!pills) return;
+    pills.innerHTML = list.map(([k, l]) => `<button class="pill ${k === key ? 'on' : ''}" data-p="${k}">${l}</button>`).join('');
+    pills.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { current.period = b.dataset.p; showPeriod(a, d, price, b.dataset.p); });
+    const [, label, days] = PERIODS.find(p => p[0] === key);
+    let ch = null, since = '';
+    if (key === 'hoy') { ch = d.meta.prev ? price / d.meta.prev - 1 : null; since = 'hoy'; }
+    else if (key === 'compra') {
+      const sn = await snapshot(a).catch(() => null);
+      ch = sn && sn.eurRet != null ? sn.eurRet : price / pos.avg - 1;
+      since = sn && sn.plEur != null ? `desde la compra (${sn.plEur >= 0 ? '+' : ''}${eur(sn.plEur)})` : 'desde la compra';
+    } else {
+      let t = d.t, c = d.c;
+      if (days === 0 || days > 700) { const w = await yahoo(a.yahoo, 'max', '1wk').catch(() => null); if (w && w.c.length) { t = w.t; c = w.c; } }
+      if (days === 0) { ch = price / c[0] - 1; since = 'desde ' + dateS(t[0]); }
+      else {
+        const base = A.changeSince(t, c, days);
+        ch = base == null ? price / c[0] - 1 : (1 + base) * price / c[c.length - 1] - 1;
+        since = base == null ? 'desde ' + dateS(t[0]) + ' (no hay más datos)' : 'en ' + ({ '1s': '1 semana', '1m': '1 mes', '3m': '3 meses', '6m': '6 meses', '1a': '1 año', '5a': '5 años' })[key];
+      }
+    }
+    const el = $('#dCh'); if (!el || current.period !== undefined && (current.period || 'hoy') !== key) return;
+    el.innerHTML = `<span class="${cls(ch)}">${pctS(ch)}</span> <span class="muted small" style="font-weight:400">${esc(since)} · ${esc(d.meta.exchange || '')}</span>`;
   }
 
   async function gatherExtra(a, d) {
@@ -420,17 +457,18 @@
   }
 
   async function tabChart(a, d, body) {
-    const ranges = [['1M', 30], ['3M', 91], ['6M', 182], ['1A', 365], ['2A', 730], ['MAX', 0]];
-    const r = current.range || '1A';
+    const ranges = [['1S', 7], ['1M', 30], ['3M', 91], ['6M', 182], ['1A', 365], ['2A', 730], ['5A', 1826], ['MAX', 0]];
+    const r = current.range || 'MAX';
     body.innerHTML = `<div class="card"><div class="pills">${ranges.map(([k]) => `<button class="pill ${k === r ? 'on' : ''}" data-r="${k}">${k}</button>`).join('')}</div>
       <div id="chartInfo" class="small muted">&nbsp;</div><canvas id="cv"></canvas>
-      <div class="small muted" style="margin-top:6px"><span style="color:#38bdf8">━</span> precio ${r !== 'MAX' ? '· <span style="color:#f59e0b">━</span> media 50 · <span style="color:#a78bfa">━</span> media 200' : ''}${window.Portfolio.position(a).avg > 0 ? ' · <span style="color:#22c55e">┅</span> tu precio medio de compra' : ''}</div></div>
+      <div class="small muted" style="margin-top:6px"><span style="color:#38bdf8">━</span> precio ${r !== 'MAX' && r !== '5A' ? '· <span style="color:#f59e0b">━</span> media 50 · <span style="color:#a78bfa">━</span> media 200' : ''}${window.Portfolio.position(a).avg > 0 ? ' · <span style="color:#22c55e">┅</span> tu precio medio de compra' : ''}</div></div>
       <div class="card" id="histCard"></div>`;
     body.querySelectorAll('.pill[data-r]').forEach(b => b.onclick = () => { current.range = b.dataset.r; tabChart(a, d, body); });
     let t, c, overlays = [];
-    if (r === 'MAX') {
+    if (r === 'MAX' || r === '5A') {
       const w = await yahoo(a.yahoo, 'max', '1wk');
       t = w.t; c = w.c;
+      if (r === '5A') { const from = t[t.length - 1] - 1826 * 86400; const i0 = Math.max(0, t.findIndex(x => x >= from)); t = t.slice(i0); c = c.slice(i0); }
     } else {
       const days = ranges.find(x => x[0] === r)[1];
       const s50 = A.sma(d.c, 50), s200 = A.sma(d.c, 200);
@@ -586,12 +624,11 @@
     const ops = (a.ops || []).slice().sort((x, y) => y.date.localeCompare(x.date));
     const pl = price && pos.avg > 0 ? price / pos.avg - 1 : null;
     body.innerHTML = `
-      <div class="card"><h2>Resumen</h2><div class="kv">
+      <div class="card"><h2>Resumen</h2><div id="fxBox" style="margin-bottom:10px"></div><div class="kv">
         <div><span>Cantidad</span><b>${num(pos.qty, pos.qty % 1 ? 4 : 0)}</b></div>
         <div><span>Precio medio (${esc(ccy)})</span><b>${pos.avg ? num(pos.avg) : '–'}</b></div>
         <div><span>Resultado en ${esc(ccy)}</span><b class="${cls(pl)}">${pctS(pl)}</b></div>
         <div><span>Pagado en euros</span><b>${pos.costEur ? eur(pos.costEur) : '–'}</b></div></div>
-        <div id="fxBox" class="small" style="margin-top:8px"></div>
         ${a.seeded && !ops.length ? `<div class="small warn" style="margin-top:6px">Posición estimada a partir de tu captura de Trade Republic (${esc(typeof a.seeded === 'string' ? a.seeded : '')}). La cantidad y el precio medio son aproximados; apunta tus operaciones para tener la cifra exacta.</div>` : ''}</div>
       <div class="card"><h2>Mis operaciones</h2>
         ${ops.length ? ops.map(o => `<div class="asset"><div class="grow"><b class="${o.type === 'compra' ? 'up' : 'down'}">${o.type === 'compra' ? 'Compra' : 'Venta'}</b> ${num(o.qty, o.qty % 1 ? 4 : 0)} a ${num(o.price)} ${esc(ccy)}
@@ -622,9 +659,10 @@
         const box = $('#fxBox'); if (!box) return;
         if (pos.costEur) {
           const eurRet = value / pos.costEur - 1, fxEff = eurRet - pl;
-          box.innerHTML = `Valor ${eur(value)} · resultado en euros <b class="${cls(eurRet)}">${pctS(eurRet)}</b> (${value - pos.costEur >= 0 ? '+' : ''}${eur(value - pos.costEur)}).<br>
-            Del precio: <span class="${cls(pl)}">${pctS(pl)}</span> · De la moneda: <span class="${cls(fxEff)}">${pctS(fxEff)}</span>${ccy !== 'EUR' ? ` (si el ${esc(ccy)} se debilita frente al euro, pierdes aunque el precio no baje)` : ''}.`;
-        } else box.innerHTML = `<span class="muted">Valor ${eur(value)}. Apunta el importe pagado en euros para separar el efecto de la moneda.</span>`;
+          box.innerHTML = `<div class="kv"><div><span>Valor actual</span><b style="font-size:20px">${eur(value)}</b></div>
+            <div><span>Ganancia / pérdida</span><b style="font-size:20px" class="${cls(eurRet)}">${value - pos.costEur >= 0 ? '+' : ''}${eur(value - pos.costEur)}</b><div class="small ${cls(eurRet)}">${pctS(eurRet)}</div></div></div>
+            ${Math.abs(fxEff) < 0.0005 ? '' : `<div class="small" style="margin-top:6px">Del precio: <span class="${cls(pl)}">${pctS(pl)}</span> · De la moneda: <span class="${cls(fxEff)}">${pctS(fxEff)}</span>${ccy !== 'EUR' ? ` (si el ${esc(ccy)} se debilita frente al euro, pierdes aunque el precio no baje)` : ''}.</div>`}`;
+        } else box.innerHTML = `<div><span class="small muted">Valor actual</span><div style="font-size:20px;font-weight:700">${eur(value)}</div></div><div class="small muted">Apunta el importe pagado en euros para ver la ganancia en euros y el efecto de la moneda.</div>`;
       }).catch(() => {});
     }
     body.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
