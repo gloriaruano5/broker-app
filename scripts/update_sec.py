@@ -311,6 +311,10 @@ def funds(tickers):
             periods = sorted(by_period, reverse=True)[:2]
             if not periods:
                 continue
+            # Fondos que ya no presentan informes (cerrados o con otro registro): se ignoran.
+            if periods[0] < (date.today() - timedelta(days=200)).isoformat():
+                print(f"  13F {fund['name']}: último informe {periods[0]}, demasiado antiguo; se omite")
+                continue
             latest = holdings_13f(fund["cik"], by_period[periods[0]]["accessionNumber"])
             prev = holdings_13f(fund["cik"], by_period[periods[1]]["accessionNumber"]) if len(periods) > 1 else []
             tracked.append(fund["name"])
