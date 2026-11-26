@@ -221,6 +221,27 @@
       if (neg >= 4) alerts.push({ kind: 'r', text: `Hay ${neg} titulares geopolíticos negativos recientes sobre sus temas. Revisa la pestaña Geopolítica.` });
     }
 
+    // Datos anticipadores (no se pueden comprobar con el pasado salvo el MVRV: peso pequeño y avisado).
+    const ld = extra.leading;
+    if (ld) {
+      if (ld.revUp != null && ld.revDown != null && ld.revUp + ld.revDown >= 2) {
+        cats.add('analistas');
+        if (ld.revUp >= 2 * Math.max(1, ld.revDown)) add(0.25, `Los analistas han subido sus previsiones de beneficio en las últimas 4 semanas (${ld.revUp} suben, ${ld.revDown} bajan). Suele anticipar buenas noticias; dato aún no comprobado con su historial.`);
+        else if (ld.revDown >= 2 * Math.max(1, ld.revUp)) add(-0.25, `Los analistas han bajado sus previsiones de beneficio en las últimas 4 semanas (${ld.revDown} bajan, ${ld.revUp} suben). Dato aún no comprobado con su historial.`);
+        else reasons.push({ pts: 0, kind: 'y', text: `Revisiones de previsiones equilibradas en 4 semanas (${ld.revUp} suben, ${ld.revDown} bajan).` });
+      }
+      if (ld.short && ld.short.dtc != null) {
+        const ch = ld.short.prev ? ld.short.interest / ld.short.prev - 1 : null;
+        reasons.push({ pts: 0, kind: ld.short.dtc > 5 ? 'r' : 'y', text: `Posiciones cortas (apuestas a la baja): ${ld.short.dtc.toFixed(1).replace('.', ',')} días de volumen para cerrarlas${ch != null ? `, ${ch >= 0 ? 'suben' : 'bajan'} un ${pct(Math.abs(ch))} en dos semanas` : ''}. ${ld.short.dtc > 5 ? 'Muchas: hay inversores que esperan caídas, aunque también puede provocar subidas bruscas si se cierran.' : 'Nivel normal.'}` });
+      }
+      if (ld.mvrv != null) {
+        cats.add('onchain');
+        if (ld.mvrvAsset === 'btc' && ld.mvrv > 3.5) add(-0.5, `MVRV on-chain de ${ld.mvrv.toFixed(2).replace('.', ',')}: los tenedores acumulan mucha ganancia sin vender. En el pasado, por encima de 3,5 casi siempre estuvo cerca de un techo.`);
+        else if (ld.mvrvAsset === 'btc' && ld.mvrv < 1) add(0.5, `MVRV on-chain de ${ld.mvrv.toFixed(2).replace('.', ',')}: de media, los tenedores están en pérdidas. En el pasado, por debajo de 1 fue zona de compra a medio plazo.`);
+        else reasons.push({ pts: 0, kind: 'y', text: `MVRV on-chain de ${ld.mvrv.toFixed(2).replace('.', ',')}: zona intermedia${ld.mvrvAsset === 'btc' ? ' (en el pasado solo los extremos, por debajo de 1 o por encima de 3,5, anticiparon algo)' : ' (en Ethereum no ha anticipado bien en el pasado)'}.` });
+      }
+    }
+
     let label, kind;
     if (score >= 2) { label = 'Señales favorables: posible zona de compra'; kind = 'g'; }
     else if (score >= 0.75) { label = 'Ligeramente favorable: mantener o comprar poco a poco'; kind = 'g'; }
@@ -240,6 +261,14 @@
       text: `${reasons.filter(r => r.pts > 0).length} señales a favor y ${reasons.filter(r => r.pts < 0).length} en contra; ${cats.size} de ${possible} tipos de datos disponibles.` +
         (agreement < 0.3 ? ' Las señales se contradicen, así que la orientación es débil.' : '')
     };
+    // Régimen de mercado: según la prueba histórica, la señal ha sido mucho más fiable con el mercado bajista.
+    if (extra.regime) {
+      const rg = extra.regime, lv = ['Baja', 'Media', 'Alta'];
+      reasons.push({ pts: 0, kind: rg.r === 'alcista' ? 'g' : rg.r === 'bajista' ? 'r' : 'y', text: `Mercado en general (${rg.ref}): ${rg.r}.` });
+      const i = lv.indexOf(confidence.level);
+      if (rg.r === 'bajista' && kind !== 'y' && i < 2) { confidence.level = lv[i + 1]; confidence.text += ' Sube un nivel: con el mercado bajista, esta señal acertó bastante más en el pasado.'; }
+      if (rg.r === 'alcista' && kind === 'r' && i > 0) { confidence.level = lv[i - 1]; confidence.text += ' Baja un nivel: con el mercado alcista, las señales de precaución fallaron a menudo en el pasado.'; }
+    }
     const top = reasons.filter(r => r.pts !== 0).sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 2)
       .map(r => r.text.split(/\. /)[0].replace(/\.$/, ''));
     const why = top.length ? 'Lo que más pesa: ' + top.join('; ') + '.' : '';
@@ -429,7 +458,12 @@
     return { b, name, edge, worked, weak: !worked && (fav || unf), text: txt + (fav || unf ? (worked ? ' Esta señal ha aportado algo en este activo.' : ' En este activo esta señal NO ha mejorado al azar: tómala con mucha cautela.') : '') };
   }
 
-  const api = { backtest, backtestVerdict, bucketOf, BUCKETS, priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
+  function regimeOf(d) {
+    const c = d && d.c; if (!c || c.length < 200) return null;
+    const n = c.length - 1, s50 = sma(c, 50)[n], s200 = sma(c, 200)[n], up = c[n] > s200, g = s50 > s200;
+    return up && g ? 'alcista' : !up && !g ? 'bajista' : 'lateral';
+  }
+  const api = { regimeOf, backtest, backtestVerdict, bucketOf, BUCKETS, priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
   root.Analysis = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -501,6 +501,45 @@
     el.innerHTML = `<span class="${cls(ch)}">${pctS(ch)}</span> <span class="muted small" style="font-weight:400">${esc(since)} · ${esc(d.meta.exchange || '')}</span>`;
   }
 
+  // ---------- Datos anticipadores ----------
+  const NASDAQ_H = { Accept: 'application/json', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' };
+  const usTicker = a => a.type === 'Acción' && /^[A-Z]{1,5}$/.test(a.yahoo) ? a.yahoo : null;
+  const nint = v => v == null ? null : +String(v).replace(/[^0-9.\-]/g, '') || 0;
+  async function leadingData(a) {
+    const out = {};
+    const t = usTicker(a);
+    if (t) {
+      await cached('lead:' + t, 720, async () => {
+        const [f, r, sh] = await Promise.all([
+          http(`https://api.nasdaq.com/api/analyst/${t}/earnings-forecast`, NASDAQ_H).catch(() => null),
+          http(`https://api.nasdaq.com/api/analyst/${t}/ratings`, NASDAQ_H).catch(() => null),
+          http(`https://api.nasdaq.com/api/quote/${t}/short-interest?assetClass=stocks`, NASDAQ_H).catch(() => null)
+        ]);
+        const o = {};
+        try { const j = JSON.parse(f.text).data; const rows = [...((j.quarterlyForecast || {}).rows || []).slice(0, 1), ...((j.yearlyForecast || {}).rows || []).slice(0, 1)];
+          if (rows.length) { o.revUp = rows.reduce((x, r) => x + (nint(r.up) || 0), 0); o.revDown = rows.reduce((x, r) => x + (nint(r.down) || 0), 0); o.eps = rows.map(r => ({ period: r.fiscalEnd, eps: r.consensusEPSForecast, n: nint(r.noOfEstimates) })); } } catch (e) {}
+        try { const j = JSON.parse(r.text).data; o.rating = j.meanRatingType; o.ratingNote = j.ratingsSummary; } catch (e) {}
+        try { const rows = JSON.parse(sh.text).data.shortInterestTable.rows; if (rows && rows.length) o.short = { date: rows[0].settlementDate, interest: nint(rows[0].interest), prev: rows[1] ? nint(rows[1].interest) : null, dtc: nint(rows[0].daysToCover) }; } catch (e) {}
+        return o;
+      }).then(o => Object.assign(out, o)).catch(() => {});
+    }
+    if (a.id === 'btc' || a.id === 'eth') {
+      const m = await cached('mvrv:' + a.id, 720, async () => {
+        const r = await http(`https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=${a.id}&metrics=CapMVRVCur&frequency=1d&page_size=7&paging_from=end`);
+        const rows = JSON.parse(r.text).data || []; const last = rows.filter(x => x.CapMVRVCur).pop();
+        return last ? { v: +last.CapMVRVCur, date: last.time.slice(0, 10) } : null;
+      }).catch(() => null);
+      if (m) { out.mvrv = m.v; out.mvrvDate = m.date; out.mvrvAsset = a.id; }
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  async function marketRegime(a) {
+    const ref = isCrypto(a) ? assets.find(x => x.id === 'btc') || { yahoo: 'BTC-USD' } : assets.find(x => x.id === 'sp500') || { yahoo: 'SXR8.DE' };
+    const d = await yahoo(ref.yahoo, '2y', '1d').catch(() => null);
+    const r = d ? A.regimeOf(d) : null;
+    return r ? { r, ref: isCrypto(a) ? 'Bitcoin' : 'S&P 500' } : null;
+  }
+
   async function gatherExtra(a, d) {
     const [nw, fg, sec, geo] = await Promise.all([
       news(a.news).catch(() => null),
@@ -510,7 +549,8 @@
     ]);
     const s = sec && sec.assets && sec.assets[a.sec];
     const funds = sec && sec.funds && sec.funds.positions && sec.funds.positions[a.sec];
-    const extra = { news: nw, fearGreed: fg, insiders: s && s.insiders, filings: s && s.filings, funds, geoNews: geo, sec, rules: a.rules };
+    const [leading, regime] = await Promise.all([leadingData(a).catch(() => null), marketRegime(a).catch(() => null)]);
+    const extra = { news: nw, fearGreed: fg, insiders: s && s.insiders, filings: s && s.filings, funds, geoNews: geo, sec, rules: a.rules, leading, regime };
     if (a.type === 'Acción') {
       const price = d.meta.price || d.c[d.c.length - 1];
       extra.valuation = null;
@@ -600,6 +640,13 @@
             <div class="row small" style="justify-content:space-between"><span class="down">▼ ${num(lo, 2)} ${curR} (${pctS(r.lowPct)})</span><span class="up">${num(hi, 2)} ${curR} (${pctS(r.highPct)}) ▲</span></div></div>`; }).join('')}
         ${extra.summary && extra.summary.targetPrice ? `<div class="small" style="margin-top:6px">Precio objetivo medio de los analistas a 12 meses: <b>${num(extra.summary.targetPrice * fxR, 2)} ${curR}</b> (${pctS(extra.summary.targetPrice / m.last - 1)}).</div>` : ''}
         <div class="small muted" style="margin-top:8px">Es la estadística de su propio pasado, no una predicción: un suceso nuevo (resultados, aranceles, una crisis) puede sacarlo del rango. La marca blanca es el precio de hoy.</div></div>` : ''}
+      ${extra.leading || extra.regime ? (() => { const L = extra.leading || {}; return `<div class="card"><h2>Datos anticipadores</h2><div class="kv">
+        ${extra.regime ? `<div><span>Mercado (${esc(extra.regime.ref)})</span><b class="${extra.regime.r === 'alcista' ? 'up' : extra.regime.r === 'bajista' ? 'down' : 'warn'}">${esc(extra.regime.r)}</b></div>` : ''}
+        ${L.revUp != null ? `<div><span>Previsiones de analistas (4 sem.)</span><b>${L.revUp} ▲ · ${L.revDown} ▼</b></div>` : ''}
+        ${L.rating ? `<div><span>Recomendación media</span><b>${esc(({ Buy: 'Comprar', 'Strong Buy': 'Compra fuerte', Hold: 'Mantener', Sell: 'Vender', 'Strong Sell': 'Venta fuerte' })[L.rating] || L.rating)}</b></div>` : ''}
+        ${L.short ? `<div><span>Cortos (días para cerrarlos)</span><b class="${L.short.dtc > 5 ? 'down' : ''}">${num(L.short.dtc, 1)}${L.short.prev ? ' · ' + pctS(L.short.interest / L.short.prev - 1) : ''}</b></div>` : ''}
+        ${L.mvrv != null ? `<div><span>MVRV on-chain</span><b class="${L.mvrv > 3.5 ? 'down' : L.mvrv < 1 ? 'up' : ''}">${num(L.mvrv, 2)}</b></div>` : ''}</div>
+        <div class="small muted" style="margin-top:6px">Datos que a veces se adelantan al precio. El mercado general cambia la fiabilidad de la señal: con el mercado bajista acertó bastante más que con el alcista. Las revisiones de analistas y los cortos todavía no se pueden comprobar con el pasado (se guardan cada día para medirlos), por eso pesan poco o nada. Del MVRV solo han servido los extremos. Fuentes: Nasdaq y Coin Metrics. Flujos de ETF: no hay fuente gratuita fiable.</div></div>`; })() : ''}
       ${ev.alerts.length ? `<div class="card"><h2>Qué ha cambiado</h2>${ev.alerts.map(x => `<div class="reason ${x.kind === 'g' ? 'up' : x.kind === 'r' ? 'down' : 'warn'}">${esc(x.text)}</div>`).join('')}</div>` : ''}
       ${imp.length ? `<div class="card"><h2>Lo importante esta semana</h2>${newsList(imp, 3)}</div>` : ''}
       ${note ? `<div class="card"><h2>Comentario del día <span class="badge">${esc(notes.date || '')}</span></h2><div style="white-space:pre-wrap">${esc(note)}</div></div>` : ''}
