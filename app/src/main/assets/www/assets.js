@@ -22,6 +22,7 @@ window.DEFAULT_ASSETS = [
   { id: 'japan', name: 'MSCI Core Japan JPY (Acc)', yahoo: 'LCUJ.DE', type: 'ETF', news: 'bolsa Japón Nikkei', themes: ['japon'], isin: 'LU1781541252', note: 'Amundi Core MSCI Japan UCITS ETF Acc (LCUJ, Xetra, en euros)' },
   { id: 'copper', name: 'Copper USD', yahoo: 'COPA.L', type: 'Materia prima', news: 'precio del cobre', themes: ['cobre', 'china'], isin: 'GB00B15KXQ89', note: 'WisdomTree Copper (COPA, en USD)' },
   { id: 'mitsu', name: 'Mitsubishi', yahoo: '8058.T', type: 'Acción', news: 'Mitsubishi Corporation', themes: ['japon'], note: 'Mitsubishi Corporation (8058, ISIN JP3898400001), cotiza en Tokio en yenes.' },
+  { id: 'nucera', name: 'Thyssenkrupp Nucera', yahoo: 'NCH2.DE', type: 'Acción', news: 'thyssenkrupp nucera', themes: ['hidrogeno', 'energia'], note: 'Cotiza en Xetra, en euros.' },
   { id: 'btc', name: 'Bitcoin', yahoo: 'BTC-USD', type: 'Cripto', news: 'Bitcoin', themes: ['cripto', 'fed'] },
   { id: 'eth', name: 'Ethereum', yahoo: 'ETH-USD', type: 'Cripto', news: 'Ethereum', themes: ['cripto'] },
   { id: 'sol', name: 'Solana', yahoo: 'SOL-USD', type: 'Cripto', news: 'Solana crypto', themes: ['cripto'] }
@@ -43,6 +44,7 @@ window.THEMES = {
   agua: { label: 'Agua e infraestructuras', q: 'escasez de agua infraestructura inversión' },
   aranceles: { label: 'Aranceles y comercio', q: 'aranceles comercio internacional Trump' },
   regulacion: { label: 'Regulación tecnológica', q: 'antimonopolio Google regulación tecnológicas' },
+  hidrogeno: { label: 'Hidrógeno verde y subvenciones', q: 'hidrógeno verde electrolizadores subvenciones Europa' },
   cripto: { label: 'Regulación y flujos cripto', q: 'regulación criptomonedas ETF bitcoin SEC' }
 };
 
@@ -67,6 +69,7 @@ window.ASSET_META = {
   japan: { sector: 'Bolsa diversificada', country: 'Japón', fx: 'JPY' },
   copper: { sector: 'Materiales / cobre', country: 'Global', fx: 'USD' },
   mitsu: { sector: 'Conglomerado / materias primas', country: 'Japón', fx: 'JPY' },
+  nucera: { sector: 'Industria / hidrógeno', country: 'Alemania', fx: 'EUR' },
   btc: { sector: 'Cripto', country: 'Global', fx: 'USD' },
   eth: { sector: 'Cripto', country: 'Global', fx: 'USD' },
   sol: { sector: 'Cripto', country: 'Global', fx: 'USD' }

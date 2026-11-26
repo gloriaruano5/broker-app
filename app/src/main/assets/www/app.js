@@ -11,12 +11,14 @@
   function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* lleno: se ignora */ } }
   let assets = load('assets', null) || window.DEFAULT_ASSETS.map(a => Object.assign({ qty: 0, cost: 0 }, a));
   // Si la lista inicial se corrige (símbolos, ISIN), se actualiza en el móvil sin tocar cantidades ni operaciones.
-  const DEFAULTS_VERSION = 2;
+  const DEFAULTS_VERSION = 3;
   if (load('defaultsVersion', 1) < DEFAULTS_VERSION) {
     assets.forEach(a => {
       const def = window.DEFAULT_ASSETS.find(d => d.id === a.id);
       if (def) ['yahoo', 'note', 'isin', 'name'].forEach(k => { if (def[k] !== undefined) a[k] = def[k]; else if (k !== 'name') delete a[k]; });
     });
+    // Activos nuevos de la lista inicial que aún no estén en el móvil.
+    window.DEFAULT_ASSETS.forEach((d, i) => { if (!assets.some(a => a.id === d.id)) assets.splice(Math.min(i, assets.length), 0, Object.assign({ qty: 0, cost: 0 }, d)); });
     save('defaultsVersion', DEFAULTS_VERSION);
     save('assets', assets);
   }
@@ -170,6 +172,15 @@
     const d = await daily(a);
     const price = d.meta.price || d.c[d.c.length - 1];
     const fx = await fxToEur(d.meta.currency);
+    // Posición precargada desde el valor en euros y el % desde la compra que muestra el bróker.
+    if (a.seed && !(a.ops && a.ops.length) && !(a.qty > 0) && price > 0 && fx > 0) {
+      a.qty = a.seed.valueEur / (price * fx);
+      a.cost = price / (1 + a.seed.pct);
+      a.costEur = a.seed.valueEur / (1 + a.seed.pct);
+      a.seeded = a.seed.date || true;
+      delete a.seed;
+      persist();
+    }
     const pos = window.Portfolio.position(a);
     const value = pos.qty * price * fx;
     const r = { a, d, price, ccy: d.meta.currency, fx, pos, value };
@@ -279,7 +290,7 @@
     $('#total').textContent = total > 0 ? eur(total) : 'Añade tus cantidades';
     if (invested > 0) {
       $('#totalPl').innerHTML = `<span class="${cls(plSum)}">${plSum >= 0 ? '+' : ''}${eur(plSum)} (${pctS(plSum / invested)})</span> <span class="muted">sobre lo invertido</span>` +
-        (fxSum ? `<div class="muted">De eso, el efecto de la moneda es <span class="${cls(fxSum)}">${fxSum >= 0 ? '+' : ''}${eur(fxSum)}</span> (solo en los activos con el importe pagado en euros).</div>` : '');
+        (Math.abs(fxSum) >= 1 ? `<div class="muted">De eso, el efecto de la moneda es <span class="${cls(fxSum)}">${fxSum >= 0 ? '+' : ''}${eur(fxSum)}</span> (solo en los activos con el importe pagado en euros).</div>` : '');
     } else $('#totalPl').innerHTML = '<span class="muted">Toca un activo, entra en «Mi posición» y apunta tus compras.</span>';
     if (missing) $('#totalPl').innerHTML += `<div class="warn">${missing} activo(s) sin datos. Revisa su símbolo en Ajustes.</div>`;
     const order = { r: 0, g: 1, y: 2 };
@@ -562,7 +573,8 @@
         <div><span>Precio medio (${esc(ccy)})</span><b>${pos.avg ? num(pos.avg) : '–'}</b></div>
         <div><span>Resultado en ${esc(ccy)}</span><b class="${cls(pl)}">${pctS(pl)}</b></div>
         <div><span>Pagado en euros</span><b>${pos.costEur ? eur(pos.costEur) : '–'}</b></div></div>
-        <div id="fxBox" class="small" style="margin-top:8px"></div></div>
+        <div id="fxBox" class="small" style="margin-top:8px"></div>
+        ${a.seeded && !ops.length ? `<div class="small warn" style="margin-top:6px">Posición estimada a partir de tu captura de Trade Republic (${esc(typeof a.seeded === 'string' ? a.seeded : '')}). La cantidad y el precio medio son aproximados; apunta tus operaciones para tener la cifra exacta.</div>` : ''}</div>
       <div class="card"><h2>Mis operaciones</h2>
         ${ops.length ? ops.map(o => `<div class="asset"><div class="grow"><b class="${o.type === 'compra' ? 'up' : 'down'}">${o.type === 'compra' ? 'Compra' : 'Venta'}</b> ${num(o.qty, o.qty % 1 ? 4 : 0)} a ${num(o.price)} ${esc(ccy)}
           <div class="small muted">${esc(o.date)}${o.eur != null ? ' · ' + num(o.eur, 2) + ' €' : ''}</div></div><button class="icon" data-del="${esc(o.id)}">✕</button></div>`).join('')
@@ -826,7 +838,13 @@
     view.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [assets[i - 1], assets[i]] = [assets[i], assets[i - 1]]; persist(); renderSettings(); } });
     $('#addBtn').onclick = () => go('editar', null);
     $('#expBtn').onclick = () => { $('#backup').value = JSON.stringify({ assets, settings }); $('#backup').select(); };
-    $('#impBtn').onclick = () => { try { const j = JSON.parse($('#backup').value); if (!Array.isArray(j.assets)) throw 0; assets = j.assets; settings = Object.assign(settings, j.settings || {}); persist(); save('settings', settings); toast('Importado'); renderSettings(); } catch (e) { toast('El texto no es una copia válida'); } };
+    $('#impBtn').onclick = () => { try { const j = JSON.parse($('#backup').value);
+      if (j.seed && !j.assets) { // formato corto: {"seed":{"id":[valor €, % desde la compra]}, "date": "..."}
+        let n = 0;
+        Object.entries(j.seed).forEach(([id, [v, pc]]) => { const a = assets.find(x => x.id === id); if (a) { a.seed = { valueEur: v, pct: pc / 100, date: j.date }; a.qty = 0; a.ops = []; n++; } });
+        persist(); clearCache(); toast(`Cargadas ${n} posiciones`); stack.length = 0; current = { name: 'cartera' }; render(); return;
+      }
+      if (!Array.isArray(j.assets)) throw 0; assets = j.assets; settings = Object.assign(settings, j.settings || {}); persist(); save('settings', settings); toast('Importado'); renderSettings(); } catch (e) { toast('El texto no es una copia válida'); } };
     $('#repoBtn').onclick = () => { settings.dataRepo = $('#repo').value.trim(); save('settings', settings); clearCache(); toast('Guardado'); };
     $('#resetBtn').onclick = () => { if (!$('#resetBtn').dataset.sure) { $('#resetBtn').dataset.sure = 1; $('#resetBtn').textContent = 'Toca otra vez para confirmar (se borran tus cantidades)'; return; } assets = window.DEFAULT_ASSETS.map(a => Object.assign({ qty: 0, cost: 0 }, a)); persist(); renderSettings(); };
   }
