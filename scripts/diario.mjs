@@ -60,6 +60,8 @@ fs.mkdirSync(new URL('../data/diario/', import.meta.url), { recursive: true });
 const prev = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(l => l && !l.startsWith(`{"date":"${today}"`)) : [];
 prev.push(JSON.stringify(row));
 fs.writeFileSync(file, prev.join('\n') + '\n');
+// Última fila suelta: la lee el móvil para las notificaciones (señal, miedo y codicia, directivos).
+fs.writeFileSync(new URL('../data/diario/ultimo.json', import.meta.url), JSON.stringify(row));
 const text = lines.join('\n');
 console.log(text);
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '```\n' + text + '\n```\n');

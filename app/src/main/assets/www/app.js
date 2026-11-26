@@ -23,7 +23,7 @@
     save('assets', assets);
   }
   let settings = Object.assign({ dataRepo: 'gloriaruano5/broker-app', branch: 'main' }, load('settings', {}));
-  const persist = () => save('assets', assets);
+  const persist = () => { save('assets', assets); syncNotif(); };
 
   // ---------- Red ----------
   let reqId = 0; const pending = {};
@@ -844,7 +844,7 @@
         <label>Precio medio de compra (${esc(ccy)})</label><input id="pCost" type="number" inputmode="decimal" step="any" value="${a.cost || ''}">
         <label>Total pagado en euros (opcional, para ver el efecto de la moneda)</label><input id="pCostEur" type="number" inputmode="decimal" step="any" value="${a.costEur || ''}">
         <button class="btn sec" id="pSave">Guardar</button></div>` : ''}
-      <div class="card"><h2>Mis reglas</h2><div class="small muted">Te aviso en la pantalla de Cartera cuando el precio cruce estos niveles (en ${esc(ccy)}).</div>
+      <div class="card"><h2>Mis reglas</h2><div class="small muted">Te aviso en Cartera y con una notificación en el móvil cuando el precio cruce estos niveles (en ${esc(ccy)}).</div>
         <label>Comprar más si baja de</label><input id="rBuy" type="number" inputmode="decimal" step="any" value="${rules.buyBelow || ''}">
         <label>Precio objetivo para vender</label><input id="rSell" type="number" inputmode="decimal" step="any" value="${rules.sellAbove || ''}">
         <label>Precio de salida (stop) si cae por debajo de</label><input id="rStop" type="number" inputmode="decimal" step="any" value="${rules.stopBelow || ''}">
@@ -1284,10 +1284,12 @@
         <div class="small muted" style="margin-top:8px">De ahí se leen cada día los datos de la SEC (cuentas, directivos, fondos 13F) y el comentario diario.</div></div>
       <div class="card"><h2>Comprobación de datos</h2><div id="chkBox" class="small muted">Cargando…</div>
         <div class="btns"><button class="btn sec" id="chkBtn">Comprobar ahora</button></div></div>
+      ${notifCard()}
       <div class="card"><h2>Fuentes</h2><div class="small muted">Precios: Yahoo Finance. Noticias: Google Noticias. Miedo y codicia: CNN y alternative.me. Cuentas, directivos y 13F: SEC EDGAR.</div></div>
       <div class="disclaimer">${DISCLAIMER}</div>
       <div class="btns"><button class="btn danger" id="resetBtn">Restaurar lista inicial</button></div>`;
     view.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => go('editar', b.dataset.ed));
+    bindNotif();
     view.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [assets[i - 1], assets[i]] = [assets[i], assets[i - 1]]; persist(); renderSettings(); } });
     $('#addBtn').onclick = () => go('editar', null);
     const showChk = r => { const el = $('#chkBox'); if (!el) return;
@@ -1367,6 +1369,57 @@
     t.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:#1b2740;border:1px solid #26344f;padding:10px 16px;border-radius:10px;z-index:20';
     document.body.appendChild(t); setTimeout(() => t.remove(), 1800);
   }
+
+  // ---------- Notificaciones en el móvil (las envía Android aunque la app esté cerrada) ----------
+  const NOTIF_DEF = { on: true, move: true, moveTh: 0.08, levels: true, signal: true, fg: true, ins: true, max: 3, quiet: true };
+  const notifCfg = () => Object.assign({}, NOTIF_DEF, settings.notif || {});
+  function syncNotif() {
+    if (!window.NativeNotif) return;
+    try {
+      const n = notifCfg(), P = window.Portfolio;
+      const held = assets.filter(a => { try { return P.position(a).qty > 0; } catch (e) { return a.qty > 0; } });
+      const list = (held.length ? held : assets).map(a => ({ id: a.id, name: a.name, sym: a.yahoo, crypto: isCrypto(a),
+        buy: (a.rules || {}).buyBelow || 0, sell: (a.rules || {}).sellAbove || 0, stop: (a.rules || {}).stopBelow || 0 }));
+      window.NativeNotif.setConfig(JSON.stringify(Object.assign({}, n, { repo: settings.dataRepo, branch: settings.branch, assets: list })));
+    } catch (e) {}
+  }
+  function notifStatus() { try { return JSON.parse(window.NativeNotif.status()); } catch (e) { return {}; } }
+  function notifCard() {
+    if (!window.NativeNotif) return '<div class="card"><h2>Notificaciones</h2><div class="small muted">Solo funcionan en la app instalada en el móvil.</div></div>';
+    const n = notifCfg(), ck = (k, t, sub) => `<label class="row" style="gap:10px;align-items:flex-start;margin:8px 0"><input type="checkbox" data-nk="${k}" ${n[k] ? 'checked' : ''} style="width:auto;margin-top:3px"><span class="grow">${t}${sub ? `<div class="small muted">${sub}</div>` : ''}</span></label>`;
+    return `<div class="card" id="notifCard"><h2>Notificaciones</h2>
+      ${ck('on', '<b>Recibir avisos en el móvil</b>', 'La app revisa tu cartera cada 2 horas más o menos, aunque esté cerrada.')}
+      <div id="notifOpts" style="${n.on ? '' : 'opacity:.45;pointer-events:none'}">
+      ${ck('levels', 'Tus precios de aviso', 'Los que pones en cada activo, en «Mi posición»: comprar más, vender y precio de salida.')}
+      ${ck('move', 'Movimientos fuertes del día', `Si un activo tuyo sube o baja más de <select id="nTh" style="width:auto;display:inline-block;padding:2px 6px;margin:0">${[0.05, 0.08, 0.1, 0.15].map(v => `<option value="${v}" ${v === n.moveTh ? 'selected' : ''}>${v * 100}%</option>`).join('')}</select> en un día (en criptos, 1,5 veces eso).`)}
+      ${ck('signal', 'Cambios importantes de la señal', 'Cuando un activo pasa a «Comprar», «Reducir» o «Precaución», o sale de ahí. Una vez al día.')}
+      ${ck('ins', 'Compras de directivos', 'Cuando un directivo compra acciones de su empresa con su dinero.')}
+      ${ck('fg', 'Miedo o codicia extremos', 'Cuando el mercado entra en miedo extremo (15 o menos) o codicia extrema (85 o más).')}
+      <label>Máximo de avisos al día</label><select id="nMax">${[1, 3, 5, 10].map(v => `<option ${v === n.max ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      ${ck('quiet', 'No avisar de noche', 'Entre las 22:00 y las 8:00 no llega nada.')}
+      <div class="small muted">Si hay más avisos de los que caben, se juntan en una sola notificación.</div>
+      </div>
+      <div class="btns"><button class="btn sec" id="nTest">Probar</button><button class="btn sec" id="nNow">Comprobar ahora</button></div>
+      <div class="small muted" id="nStat"></div></div>`;
+  }
+  function bindNotif() {
+    if (!$('#notifCard')) return;
+    const upd = () => { settings.notif = Object.assign(notifCfg(), { moveTh: +$('#nTh').value, max: +$('#nMax').value });
+      $('#notifCard').querySelectorAll('[data-nk]').forEach(c => settings.notif[c.dataset.nk] = c.checked);
+      save('settings', settings); syncNotif(); $('#notifOpts').style.cssText = settings.notif.on ? '' : 'opacity:.45;pointer-events:none';
+      if (settings.notif.on) window.NativeNotif.askPermission(); showStat(); };
+    $('#notifCard').querySelectorAll('[data-nk]').forEach(c => c.onchange = upd);
+    $('#nTh').onchange = upd; $('#nMax').onchange = upd;
+    $('#nTest').onclick = () => { window.NativeNotif.askPermission(); window.NativeNotif.test(); setTimeout(showStat, 800); };
+    $('#nNow').onclick = () => { window.NativeNotif.askPermission(); window.NativeNotif.runNow(); toast('Comprobando… te llegará una notificación'); setTimeout(showStat, 15000); };
+    const showStat = () => { const st = notifStatus(); if (!$('#nStat')) return;
+      $('#nStat').innerHTML = (st.perm === false ? '<div class="warn">El móvil no deja a la app enviar notificaciones. Toca «Probar» para dar permiso, o actívalo en los ajustes de Android.</div>' : '') +
+        (st.last ? `Última revisión: ${new Date(st.last).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} (${st.lastPrices} precios). Avisos hoy: ${st.today}.` : 'Aún no ha hecho ninguna revisión.') +
+        '<div style="margin-top:4px">Si no te llegan, en Android pon la batería de Mi Cartera en «Sin restricciones».</div>'; };
+    showStat();
+  }
+  window.openAsset = id => { if (assets.some(a => a.id === id)) { stack.length = 0; current = { name: 'cartera' }; go('detalle', id); } };
+  try { syncNotif(); if (window.NativeNotif && notifCfg().on && !settings.notifAsked) { settings.notifAsked = 1; save('settings', settings); window.NativeNotif.askPermission(); } } catch (e) {}
 
   render();
 })();

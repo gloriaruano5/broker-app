@@ -3,6 +3,8 @@ package com.gloria.broker;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
+import android.app.job.JobScheduler;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -36,6 +38,8 @@ public class MainActivity extends Activity {
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
 
     private WebView webView;
+    private String pendingAsset;
+    private boolean loaded;
     private final ExecutorService pool = Executors.newFixedThreadPool(6);
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -66,6 +70,12 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageFinished(WebView view, String url) {
+                loaded = true;
+                openPending();
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri u = request.getUrl();
                 if ("appassets.androidplatform.net".equals(u.getHost())) return false;
@@ -76,7 +86,54 @@ public class MainActivity extends Activity {
         });
 
         webView.addJavascriptInterface(new Bridge(), "NativeHttp");
+        webView.addJavascriptInterface(new Notif(), "NativeNotif");
+        pendingAsset = getIntent().getStringExtra("asset");
         webView.loadUrl(HOME);
+        AlertJob.schedule(this);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        pendingAsset = intent.getStringExtra("asset");
+        if (loaded) openPending();
+    }
+
+    /** Al tocar una notificación, abre ese activo. */
+    private void openPending() {
+        if (pendingAsset == null) return;
+        String js = "window.openAsset && window.openAsset(" + JSONObject.quote(pendingAsset) + ")";
+        pendingAsset = null;
+        webView.evaluateJavascript(js, null);
+    }
+
+    /** Ajustes de notificaciones desde la página. */
+    private class Notif {
+        @JavascriptInterface
+        public void setConfig(String json) {
+            AlertJob.prefs(MainActivity.this).edit().putString("cfg", json).apply();
+            JobScheduler js = (JobScheduler) getSystemService(JOB_SCHEDULER_SERVICE);
+            try { if (!new JSONObject(json).optBoolean("on", false) && js != null) js.cancel(AlertJob.JOB_PERIODIC); } catch (Exception e) {}
+            AlertJob.schedule(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public String status() { return AlertJob.status(MainActivity.this); }
+
+        @JavascriptInterface
+        public void askPermission() {
+            if (Build.VERSION.SDK_INT >= 33 && !AlertJob.allowed(MainActivity.this))
+                main.post(() -> requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7));
+        }
+
+        @JavascriptInterface
+        public void runNow() { AlertJob.runNow(MainActivity.this); }
+
+        @JavascriptInterface
+        public void test() {
+            AlertJob.ensureChannel(MainActivity.this);
+            AlertJob.notify(MainActivity.this, 8, "Prueba de Mi Cartera", "Así te llegarán los avisos. Tócalo para abrir la app.", null, null);
+        }
     }
 
     @Override
