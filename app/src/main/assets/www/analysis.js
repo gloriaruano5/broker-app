@@ -411,7 +411,7 @@
       const inside = u.filter(x => Math.abs(x) <= 1.2816).length / u.length;
       calib[weeks] = { n: u.length, indep: Math.round(u.length * step / (weeks * 5)), coverage: inside, q10: u[Math.floor(u.length * 0.1)], q90: u[Math.floor(u.length * 0.9)] };
     }
-    return { from: t[pts[0].i], to: t[n - 1], points: pts.length, horizon: H, base, byBucket, favorable, unfavorable, strategy, calib };
+    return { pts: opts.keepPoints ? pts : undefined, from: t[pts[0].i], to: t[n - 1], points: pts.length, horizon: H, base, byBucket, favorable, unfavorable, strategy, calib };
   }
   /** Texto sencillo con la fiabilidad histórica de la señal actual. */
   function backtestVerdict(bt, score) {
