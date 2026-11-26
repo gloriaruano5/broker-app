@@ -21,7 +21,7 @@ window.DEFAULT_ASSETS = [
   { id: 'sp500', name: 'Core S&P 500 (Acc)', yahoo: 'CSPX.L', type: 'ETF', news: 'S&P 500', themes: ['fed', 'aranceles'], note: 'SUPUESTO: iShares Core S&P 500 UCITS ETF (CSPX)' },
   { id: 'japan', name: 'MSCI Core Japan JPY (Acc)', yahoo: 'SJPA.L', type: 'ETF', news: 'bolsa Japón Nikkei', themes: ['japon'], note: 'SUPUESTO: iShares Core MSCI Japan IMI (SJPA)' },
   { id: 'copper', name: 'Copper USD', yahoo: 'COPA.L', type: 'Materia prima', news: 'precio del cobre', themes: ['cobre', 'china'], note: 'SUPUESTO: WisdomTree Copper (COPA)' },
-  { id: 'mitsu', name: 'Mitsubishi', yahoo: '8058.T', type: 'Acción', news: 'Mitsubishi Corporation', themes: ['japon'], note: 'SUPUESTO: Mitsubishi Corporation (8058). Si es Mitsubishi UFJ cambia a 8306.T' },
+  { id: 'mitsu', name: 'Mitsubishi', yahoo: '8058.T', type: 'Acción', news: 'Mitsubishi Corporation', themes: ['japon'], note: 'Mitsubishi Corporation (8058, ISIN JP3898400001), cotiza en Tokio en yenes.' },
   { id: 'btc', name: 'Bitcoin', yahoo: 'BTC-USD', type: 'Cripto', news: 'Bitcoin', themes: ['cripto', 'fed'] },
   { id: 'eth', name: 'Ethereum', yahoo: 'ETH-USD', type: 'Cripto', news: 'Ethereum', themes: ['cripto'] },
   { id: 'sol', name: 'Solana', yahoo: 'SOL-USD', type: 'Cripto', news: 'Solana crypto', themes: ['cripto'] }
