@@ -1,0 +1,38 @@
+name: Prueba de modelos de predicción
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Descargar historiales
+        run: node scripts/export_hist.mjs /tmp/hist
+      - name: Instalar modelos
+        run: |
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet pandas numpy scipy scikit-learn lightgbm chronos-forecasting
+          pip install --quiet "timesfm[torch]" || echo "TimesFM no se pudo instalar"
+      - name: Comparar modelos
+        run: python scripts/ml_eval.py /tmp/hist
+      - name: Guardar resultados
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          git add data/ml.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Prueba de modelos $(date -u +%F)"
+          git pull --rebase origin main
+          git push
