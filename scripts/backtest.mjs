@@ -102,6 +102,7 @@ function portfolioTest(ids, fromDate) {
     quieta: { label: 'Reparto igual al principio y no tocar', target: () => null },
     igual: { label: 'Mismo peso a todos, reequilibrando cada mes', target: () => Object.fromEntries(ids.map(id => [id, 1 / ids.length])) },
     riesgo: { label: 'Pesos según riesgo, reequilibrando cada mes', target: d => P.riskWeights(Object.fromEntries(ids.map(id => [id, volAt(id, d) || 0.5])), groups, { asset: 0.15, groups: { Cripto: 0.15 } }) },
+    igualBanda: { label: 'Mismo peso a todos, solo cuando se separan (la app)', target: () => Object.fromEntries(ids.map(id => [id, 1 / ids.length])), band: true },
     banda: { label: 'Pesos según riesgo, solo cuando se separan (la app)', target: d => P.riskWeights(Object.fromEntries(ids.map(id => [id, volAt(id, d) || 0.5])), groups, { asset: 0.15, groups: { Cripto: 0.15 } }), band: true }
   };
   const res = {};

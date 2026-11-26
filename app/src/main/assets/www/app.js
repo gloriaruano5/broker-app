@@ -373,9 +373,32 @@
     $('#alerts').innerHTML = alerts.length
       ? alerts.map(x => `<div class="reason"><span class="dot ${x.kind}" style="display:inline-block"></span> <b>${esc(x.a.name)}</b>: ${esc(x.text)}</div>`).join('')
       : 'Sin cambios destacados en precios, tendencias ni en tus precios objetivo.';
+    try {
+      const snaps = (await Promise.all(assets.map(a => snapshot(a).catch(() => null)))).filter(Boolean);
+      const pl = riskPlan(snaps), outN = pl ? pl.rows.filter(r => r.out).length : 0;
+      if (outN && current.name === 'cartera' && $('#alerts')) { if (!alerts.length) $('#alerts').innerHTML = ''; $('#alerts').insertAdjacentHTML('beforeend', `<div class="reason"><span class="dot y" style="display:inline-block"></span> <b>Reparto</b>: ${outN} activo(s) se han separado de su peso según riesgo. Mira «Reparto propuesto» en Riesgo.</div>`); }
+    } catch (e) {}
     const chk = await dataCheck(false).catch(() => null);
     const bad = chk ? chk.items.filter(x => x.issues.length) : [];
     if (bad.length && current.name === 'cartera' && $('#alerts')) { if (!alerts.length) $('#alerts').innerHTML = ''; } if (bad.length && current.name === 'cartera' && $('#alerts')) $('#alerts').insertAdjacentHTML('afterbegin', bad.map(x => `<div class="reason"><span class="dot y" style="display:inline-block"></span> <b>${esc(x.name)}</b>: revisión de datos: ${esc(x.issues.join('; '))}. Puede que su gráfica o su análisis no sean fiables ahora.</div>`).join(''));
+  }
+
+  // ---------- Reparto según riesgo ----------
+  const PLAN_CAPS = { asset: 0.15, groups: { Cripto: 0.15 } };
+  let btCache = null;
+  function riskPlan(snaps) {
+    const held = snaps.filter(s => s.value > 0);
+    if (held.length < 3) return null;
+    const total = held.reduce((x, s) => x + s.value, 0);
+    const vols = {}, groups = {}, cur = {};
+    held.forEach(s => { vols[s.a.id] = A.volatility(s.d.c, 250) || 0.5; groups[s.a.id] = isCrypto(s.a) ? 'Cripto' : 'Otro'; cur[s.a.id] = s.value / total; });
+    const tw = window.Portfolio.riskWeights(vols, groups, PLAN_CAPS);
+    const rows = window.Portfolio.rebalancePlan(cur, tw, total).map(r => ({ ...r, name: held.find(s => s.a.id === r.id).a.name }));
+    let test = '';
+    const pf = btCache && btCache.portfolio;
+    if (pf && pf.full) { const q = pf.full.res, b = q.banda, z = q.quieta;
+      test = `En la prueba con ${pf.full.ids.length} de tus activos desde ${pf.full.from.slice(0, 4)}, este método dio ${pctS(b.cagr)} al año con una caída máxima de ${pctS(b.dd)}, frente a ${pctS(z.cagr)} y ${pctS(z.dd)} dejando la cartera quieta.`; }
+    return { rows, total, test };
   }
 
   // ---------- Comprobación automática de datos (en el móvil, que sí accede a los precios) ----------
@@ -818,6 +841,7 @@
     const P = window.Portfolio;
     view.innerHTML = '<div class="loading">Calculando…</div>';
     const snaps = (await Promise.all(assets.map(a => snapshot(a).catch(() => null)))).filter(Boolean);
+    btCache = await backtestData();
     if (current.name !== 'riesgo') return;
     const held = snaps.filter(s => s.value > 0);
     const items = held.map(s => { const m = metaOf(s.a); return { k: s.a.name, name: s.a.name, value: s.value, sector: m.sector, country: m.country, fx: m.fx || s.ccy }; });
@@ -849,7 +873,15 @@
     const short = id => (assets.find(a => a.id === id) || {}).yahoo.replace(/\..*$/, '').replace('-USD', '').slice(0, 5);
     const color = c => c == null ? 'transparent' : c > 0 ? `rgba(239,68,68,${Math.min(1, c) * 0.85})` : `rgba(34,197,94,${Math.min(1, -c) * 0.85})`;
     const total = held.reduce((s, x) => s + x.value, 0);
+    const plan = riskPlan(held);
     view.innerHTML = `
+      ${plan ? `<div class="card"><h2>Reparto propuesto según riesgo</h2>
+        <div class="small muted" style="margin-bottom:8px">Cada activo pesa menos cuanto más se mueve, para que ninguno domine las subidas y bajadas de la cartera. Topes: ${PLAN_CAPS.asset * 100}% por activo y ${PLAN_CAPS.groups.Cripto * 100}% entre todas las criptos. Solo se avisa cuando un activo se separa bastante (más de un 25% de su peso o 2 puntos).</div>
+        ${plan.rows.filter(r => r.out).length ? `<div class="reason warn" style="margin-bottom:6px">${plan.rows.filter(r => r.out).length} activo(s) fuera de su banda: conviene reequilibrar.</div>` : '<div class="reason up" style="margin-bottom:6px">Tu reparto está dentro de las bandas: no hace falta tocar nada.</div>'}
+        <div class="scroll"><table style="font-size:12px"><tr><th></th><th>Ahora</th><th>Prop.</th><th>Ajuste</th></tr>
+        ${plan.rows.map(r => `<tr><td>${esc(r.name)}${r.out ? ' <span class="warn">●</span>' : ''}</td><td>${num(r.cw * 100, 1)}%</td><td>${num(r.tw * 100, 1)}%</td><td class="${r.out ? (r.diff > 0 ? 'up' : 'down') : 'muted'}">${r.out ? (r.diff > 0 ? '+' : '') + eur(r.eur) : '–'}</td></tr>`).join('')}
+        </table></div>
+        <div class="small muted" style="margin-top:6px">Consejo: reequilibra sobre todo con el dinero nuevo que metas (comprando lo que está por debajo), porque vender con ganancias paga impuestos en España. ${plan.test ? esc(plan.test) : ''} No es asesoramiento financiero.</div></div>` : ''}
       ${!held.length ? '<div class="card warn">Aún no has puesto cantidades: el reparto aparecerá cuando apuntes tus compras. El riesgo y la correlación se muestran igualmente.</div>' : ''}
       ${warns.length ? `<div class="card"><h2>Avisos de concentración</h2>${warns.map(w => `<div class="reason warn">${esc(w)}</div>`).join('')}</div>` : held.length ? '<div class="card"><h2>Concentración</h2><div class="small up">Sin concentraciones excesivas.</div></div>' : ''}
       ${held.length ? `<div class="card"><h2>Reparto por activo</h2>${bars(byAsset, eur)}</div>
