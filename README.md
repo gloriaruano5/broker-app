@@ -5,6 +5,10 @@ App Android para seguir mis inversiones (acciones, ETFs, materias primas y cript
 ## Qué hace
 - **Cartera**: valor total en euros, ganancia o pérdida y avisos de cambios.
 - **Por activo**: análisis orientativo (tendencia, RSI, medias, FOMO, noticias, directivos, grandes fondos), gráfica con historial completo, noticias, geopolítica, cuentas anuales, movimientos de directivos y fondos 13F.
+- **Riesgo**: reparto por activo, sector, país y moneda con avisos de concentración; volatilidad y máxima caída por activo y de la cartera; correlación entre activos.
+- **Agenda**: resultados, dividendos y reuniones de la Fed y el BCE.
+- **Renta**: operaciones de compra y venta, plusvalías por FIFO, regla de los 2 meses y estimación del IRPF del ahorro.
+- **Reglas propias**: precio de compra, objetivo y salida por activo, con aviso en la Cartera.
 - **Mercado**: índices de miedo y codicia, indicadores clave y noticias geopolíticas de los temas que afectan a la cartera.
 
 Las cantidades y precios de compra se guardan solo en el móvil.

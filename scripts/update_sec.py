@@ -113,7 +113,67 @@ def fundamentals(cik):
             out[key] = best[1][-6:]
             if key == "revenue":
                 currency = best[0]
-    return out, currency or "USD"
+    ttm = {}
+    for key in ("eps", "revenue", "netIncome"):
+        rows = best_rows(facts, METRICS[key])
+        if rows:
+            r = trailing(rows)
+            if r:
+                ttm[key], ttm[key + "Growth"], ttm["end"] = r[0], r[1], max(ttm.get("end", ""), r[2])
+    return out, currency or "USD", ttm
+
+
+def best_rows(facts, candidates):
+    """Filas (sin filtrar) de la etiqueta con datos más recientes."""
+    best = None
+    for ns, tag in candidates:
+        node = facts.get(ns, {}).get(tag)
+        if not node:
+            continue
+        for unit, rows in node["units"].items():
+            if not rows:
+                continue
+            last = max(r["end"] for r in rows)
+            if best is None or last > best[0]:
+                best = (last, rows)
+    return best[1] if best else None
+
+
+def _dur(r):
+    return (date.fromisoformat(r["end"]) - date.fromisoformat(r["start"])).days if r.get("start") else None
+
+
+def trailing(rows):
+    """Últimos 12 meses = último ejercicio + acumulado del año en curso - mismo acumulado del año anterior.
+    Devuelve (valor 12 meses, crecimiento interanual, fecha)."""
+    uniq = {}
+    for r in rows:
+        d = _dur(r)
+        if d is None:
+            continue
+        k = (r["start"], r["end"])
+        if k not in uniq or r["filed"] > uniq[k]["filed"]:
+            uniq[k] = r
+    rows = list(uniq.values())
+    annual = sorted([r for r in rows if 330 <= _dur(r) <= 400], key=lambda r: r["end"])
+    if not annual:
+        return None
+    fy = annual[-1]
+    ytd = sorted([r for r in rows if 80 <= _dur(r) <= 300 and r["start"] > fy["start"] and r["end"] > fy["end"]],
+                 key=lambda r: (r["end"], _dur(r)))
+    if ytd:
+        cur = ytd[-1]
+        target_end = date.fromisoformat(cur["end"]) - timedelta(days=365)
+        prev = [r for r in rows if abs(_dur(r) - _dur(cur)) <= 10
+                and abs((date.fromisoformat(r["end"]) - target_end).days) <= 12]
+        if prev:
+            p = prev[0]
+            val = fy["val"] + cur["val"] - p["val"]
+            growth = cur["val"] / p["val"] - 1 if p["val"] > 0 else None
+            return val, growth, cur["end"]
+    prev_fy = annual[-2] if len(annual) > 1 else None
+    growth = fy["val"] / prev_fy["val"] - 1 if prev_fy and prev_fy["val"] > 0 else None
+    return fy["val"], growth, fy["end"]
 
 
 def form4(cik, acc, primary):
@@ -170,12 +230,30 @@ def company(ticker, cik):
         except Exception as e:  # un formulario defectuoso no debe parar todo
             print(f"  aviso form4 {ticker} {r['accessionNumber']}: {e}", file=sys.stderr)
     try:
-        fund, ccy = fundamentals(cik)
+        fund, ccy, ttm = fundamentals(cik)
     except Exception as e:
         print(f"  aviso fundamentales {ticker}: {e}", file=sys.stderr)
-        fund, ccy = {}, "USD"
+        fund, ccy, ttm = {}, "USD", {}
+    # El PER solo es fiable si las cifras están en dólares y por acción ordinaria (no ADR extranjero).
+    if foreign or ccy != "USD":
+        ttm = {}
+    nxt = next_report(rows)
     return {"cik": int(cik), "name": sub.get("name"), "foreign": foreign, "filings": filings,
-            "insiders": insiders, "fundamentals": fund, "currency": ccy}
+            "insiders": insiders, "fundamentals": fund, "currency": ccy, "ttm": ttm, "nextReport": nxt}
+
+
+def next_report(rows):
+    """Estimación de la próxima presentación de resultados: último 10-Q/10-K/20-F + ~3 meses."""
+    reports = [r for r in rows if r["form"] in ("10-Q", "10-K", "20-F", "6-K") and r.get("reportDate")]
+    reports = [r for r in reports if r["form"] != "6-K"] or reports
+    if not reports:
+        return None
+    last = max(reports, key=lambda r: r["filingDate"])
+    period = date.fromisoformat(last["reportDate"])
+    lag = (date.fromisoformat(last["filingDate"]) - period).days
+    step = 365 if last["form"] == "20-F" else 91
+    nxt_period = period + timedelta(days=step)
+    return {"estimate": (nxt_period + timedelta(days=lag)).isoformat(), "lastFiled": last["filingDate"], "lastForm": last["form"]}
 
 
 # ---------------- Fondos 13F ----------------

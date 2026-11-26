@@ -19,6 +19,9 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.net.CookieHandler;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Iterator;
@@ -39,6 +42,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Guarda las cookies entre peticiones (Yahoo las necesita para algunos datos).
+        if (CookieHandler.getDefault() == null) {
+            CookieHandler.setDefault(new CookieManager(null, CookiePolicy.ACCEPT_ALL));
+        }
         webView = new WebView(this);
         setContentView(webView);
 

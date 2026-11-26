@@ -106,9 +106,11 @@
     for (let i = 0; i < c.length; i++) if (t[i] >= yStart) { hi = Math.max(hi, c[i]); lo = Math.min(lo, c[i]); }
     m.hi52 = hi; m.lo52 = lo; m.fromHi = last / hi - 1;
 
+    const cats = new Set();
     const add = (pts, text, kind) => { score += pts; reasons.push({ pts, text, kind: kind || (pts > 0 ? 'g' : pts < 0 ? 'r' : 'y') }); };
 
     if (m.sma200) {
+      cats.add('tendencia');
       if (last > m.sma200) add(1, 'El precio está por encima de su media de 200 días: la tendencia de fondo es alcista.');
       else add(-1, 'El precio está por debajo de su media de 200 días: la tendencia de fondo es bajista.');
       const dist = last / m.sma200 - 1;
@@ -129,6 +131,7 @@
       else add(-0.5, 'La media de 50 días está por debajo de la de 200 (impulso negativo).');
     }
     if (m.rsi != null) {
+      cats.add('rsi');
       if (m.rsi >= 75) add(-1, `RSI de ${m.rsi.toFixed(0)}: sobrecompra fuerte. Suele ser mal momento para comprar con prisa.`);
       else if (m.rsi >= 70) add(-0.5, `RSI de ${m.rsi.toFixed(0)}: zona de sobrecompra.`);
       else if (m.rsi <= 25) add(1, `RSI de ${m.rsi.toFixed(0)}: sobreventa fuerte. Históricamente zona de posibles rebotes.`);
@@ -141,12 +144,14 @@
 
     const ns = extra.news ? newsSentiment(extra.news) : null;
     if (ns) {
+      cats.add('noticias');
       if (ns.avg > 0.15) add(0.5, `Tono de las noticias positivo (${ns.pos} titulares positivos y ${ns.neg} negativos de ${ns.n}).`);
       else if (ns.avg < -0.15) add(-0.5, `Tono de las noticias negativo (${ns.neg} titulares negativos y ${ns.pos} positivos de ${ns.n}).`);
       else reasons.push({ pts: 0, kind: 'y', text: `Tono de las noticias mixto (${ns.pos} positivos, ${ns.neg} negativos de ${ns.n}).` });
     }
     const fg = extra.fearGreed;
     if (fg && fg.score != null) {
+      cats.add('sentimiento');
       if (fg.score >= 75) add(-1, `Índice de miedo y codicia en ${Math.round(fg.score)} (codicia extrema): mucho FOMO en el mercado. Conviene prudencia.`);
       else if (fg.score >= 60) add(-0.25, `Índice de miedo y codicia en ${Math.round(fg.score)} (codicia).`);
       else if (fg.score <= 25) add(1, `Índice de miedo y codicia en ${Math.round(fg.score)} (miedo extremo): los mejores momentos de compra suelen darse con miedo.`);
@@ -155,6 +160,7 @@
     }
     const ins = extra.insiders;
     if (ins && ins.length) {
+      cats.add('directivos');
       const since = Date.now() - 120 * 86400000;
       let buys = 0, sells = 0, buyVal = 0, sellVal = 0;
       for (const f of ins) {
@@ -171,11 +177,36 @@
     }
     const funds = extra.funds;
     if (funds && funds.length) {
+      cats.add('fondos');
       const upN = funds.filter(f => f.status === 'nueva' || f.status === 'aumenta').length;
       const downN = funds.filter(f => f.status === 'reduce' || f.status === 'vende todo').length;
-      if (upN > downN) add(0.5, `Grandes fondos: ${upN} lo compran o aumentan y ${downN} lo reducen en su último informe 13F.`);
-      else if (downN > upN) add(-0.5, `Grandes fondos: ${downN} lo reducen o venden y ${upN} lo aumentan en su último informe 13F.`);
-      else reasons.push({ pts: 0, kind: 'y', text: `Grandes fondos: movimientos equilibrados (${upN} suben, ${downN} bajan).` });
+      const lag = funds[0].period ? ` Pista retrasada: posiciones a ${funds[0].period}, publicadas hasta 45 días después.` : ' Pista retrasada (informes trimestrales).';
+      if (upN > downN) add(0.25, `Grandes fondos: ${upN} lo compran o aumentan y ${downN} lo reducen.${lag}`);
+      else if (downN > upN) add(-0.25, `Grandes fondos: ${downN} lo reducen o venden y ${upN} lo aumentan.${lag}`);
+      else reasons.push({ pts: 0, kind: 'y', text: `Grandes fondos: movimientos equilibrados (${upN} suben, ${downN} bajan).${lag}` });
+    }
+    const val = extra.valuation;
+    if (val) {
+      cats.add('valoracion');
+      if (val.eps != null && val.eps <= 0) add(-0.5, 'La empresa tiene pérdidas en los últimos 12 meses: no hay PER y el precio depende de expectativas futuras.');
+      else if (val.pe && val.medianPe) {
+        const ratio = val.pe / val.medianPe;
+        if (ratio > 1.3) add(-0.75, `PER de ${val.pe.toFixed(0)}, un ${pct(ratio - 1)} por encima de su media de los últimos años (${val.medianPe.toFixed(0)}): cara respecto a su historia.`);
+        else if (ratio < 0.8) add(0.75, `PER de ${val.pe.toFixed(0)}, un ${pct(1 - ratio)} por debajo de su media de los últimos años (${val.medianPe.toFixed(0)}): barata respecto a su historia.`);
+        else reasons.push({ pts: 0, kind: 'y', text: `PER de ${val.pe.toFixed(0)}, en línea con su media de los últimos años (${val.medianPe.toFixed(0)}).` });
+      } else if (val.pe) reasons.push({ pts: 0, kind: 'y', text: `PER de ${val.pe.toFixed(0)} (sin historial suficiente para comparar).` });
+      if (val.growth != null) {
+        if (val.growth > 0.25) add(0.5, `Las ventas crecen un ${pct(val.growth)} interanual: el negocio acompaña.`);
+        else if (val.growth < 0) add(-0.5, `Las ventas caen un ${pct(-val.growth)} interanual.`);
+        else reasons.push({ pts: 0, kind: 'y', text: `Las ventas crecen un ${pct(val.growth)} interanual.` });
+      }
+      if (val.peg != null) reasons.push({ pts: 0, kind: val.peg < 1 ? 'g' : val.peg > 3 ? 'r' : 'y', text: `PEG (PER dividido por crecimiento) de ${val.peg.toFixed(1)}: ${val.peg < 1 ? 'precio razonable para lo que crece' : val.peg > 3 ? 'se paga mucho por cada punto de crecimiento' : 'moderado'}.` });
+    }
+    const rules = extra.rules;
+    if (rules) {
+      if (rules.buyBelow && last <= rules.buyBelow) alerts.push({ kind: 'g', text: `Ha bajado de tu precio de compra objetivo (${rules.buyBelow}).` });
+      if (rules.sellAbove && last >= rules.sellAbove) alerts.push({ kind: 'g', text: `Ha alcanzado tu precio objetivo de venta (${rules.sellAbove}).` });
+      if (rules.stopBelow && last <= rules.stopBelow) alerts.push({ kind: 'r', text: `Ha caído por debajo de tu precio de salida (${rules.stopBelow}).` });
     }
     if (extra.filings && extra.filings.length) {
       const week = Date.now() - 8 * 86400000;
@@ -194,7 +225,22 @@
     else if (score > -2) { label = 'Precaución: no perseguir el precio'; kind = 'r'; }
     else { label = 'Señales negativas: valorar reducir o proteger ganancias'; kind = 'r'; }
 
-    return { score, label, kind, reasons, alerts, metrics: m, news: ns };
+    // Confianza: cuántos tipos de datos hay y cuánto coinciden entre sí.
+    const plus = reasons.filter(r => r.pts > 0).reduce((a, r) => a + r.pts, 0);
+    const minus = -reasons.filter(r => r.pts < 0).reduce((a, r) => a + r.pts, 0);
+    const agreement = plus + minus ? Math.abs(plus - minus) / (plus + minus) : 0;
+    const possible = extra.valuation !== undefined ? 7 : 5;
+    const coverage = Math.min(1, cats.size / possible);
+    const cScore = agreement * 0.6 + coverage * 0.4;
+    const confidence = {
+      level: cScore >= 0.65 ? 'Alta' : cScore >= 0.4 ? 'Media' : 'Baja',
+      text: `${reasons.filter(r => r.pts > 0).length} señales a favor y ${reasons.filter(r => r.pts < 0).length} en contra; ${cats.size} de ${possible} tipos de datos disponibles.` +
+        (agreement < 0.3 ? ' Las señales se contradicen, así que la orientación es débil.' : '')
+    };
+    const top = reasons.filter(r => r.pts !== 0).sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 2)
+      .map(r => r.text.split(/\. /)[0].replace(/\.$/, ''));
+    const why = top.length ? 'Lo que más pesa: ' + top.join('; ') + '.' : '';
+    return { score, label, kind, reasons, alerts, metrics: m, news: ns, confidence, why };
   }
 
   function pct(x) { return (x * 100).toFixed(0) + '%'; }
@@ -206,7 +252,33 @@
     return v.toFixed(0) + ' $';
   }
 
-  const api = { sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
+  const IMPACT = ['resultados', 'beneficio', 'ingresos', 'previsiones', 'guidance', 'earnings', 'revenue', 'forecast', 'outlook',
+    'adquisición', 'acquisition', 'compra de', 'fusión', 'merger', 'dividendo', 'dividend', 'recompra', 'buyback', 'investigación',
+    'probe', 'demanda', 'lawsuit', 'multa', 'sanción', 'arancel', 'tariff', 'export', 'prohib', 'ban', 'ceo', 'dimite', 'resign',
+    'rebaja', 'downgrade', 'mejora la recomendación', 'upgrade', 'precio objetivo', 'price target', 'contrato', 'contract', 'acuerdo',
+    'deal', 'quiebra', 'bankrupt', 'regulación', 'regulator', 'sec ', 'etf', 'hackeo', 'hack', 'récord', 'record', 'split'];
+  /** Solo los titulares que cambian algo: hechos con impacto o tono fuerte, sin repeticiones. */
+  function importantNews(items, max = 5) {
+    if (!items) return [];
+    const week = Date.now() - 7 * 86400000;
+    const seen = [];
+    const out = [];
+    for (const n of items) {
+      if (n.date < week) continue;
+      const t = n.title.toLowerCase();
+      const impact = IMPACT.some(w => t.includes(w));
+      const sc = headlineScore(n.title);
+      if (!impact && Math.abs(sc) < 0.5) continue;
+      const words = new Set(t.split(/\W+/).filter(w => w.length > 3));
+      if (seen.some(s => [...words].filter(w => s.has(w)).length >= Math.min(4, words.size * 0.5))) continue;
+      seen.push(words);
+      out.push({ ...n, score: sc });
+      if (out.length >= max) break;
+    }
+    return out;
+  }
+
+  const api = { importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
   root.Analysis = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

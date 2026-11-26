@@ -45,3 +45,51 @@ window.THEMES = {
   regulacion: { label: 'Regulación tecnológica', q: 'antimonopolio Google regulación tecnológicas' },
   cripto: { label: 'Regulación y flujos cripto', q: 'regulación criptomonedas ETF bitcoin SEC' }
 };
+
+// Sector, país y divisa real de exposición de cada activo (para el reparto de la cartera).
+window.ASSET_META = {
+  nvda: { sector: 'Tecnología / chips', country: 'EE. UU.', fx: 'USD' },
+  gold: { sector: 'Oro', country: 'Global', fx: 'USD' },
+  vst: { sector: 'Energía eléctrica', country: 'EE. UU.', fx: 'USD' },
+  water: { sector: 'Agua e industria', country: 'Global', fx: 'USD' },
+  mp: { sector: 'Materiales / tierras raras', country: 'EE. UU.', fx: 'USD' },
+  rddt: { sector: 'Internet / redes sociales', country: 'EE. UU.', fx: 'USD' },
+  china: { sector: 'Bolsa diversificada', country: 'China', fx: 'CNY/HKD' },
+  q: { sector: 'Tecnología / chips', country: 'EE. UU.', fx: 'USD' },
+  dxyz: { sector: 'Tecnología no cotizada', country: 'EE. UU.', fx: 'USD' },
+  hynix: { sector: 'Tecnología / chips', country: 'Corea del Sur', fx: 'KRW' },
+  tsm: { sector: 'Tecnología / chips', country: 'Taiwán', fx: 'USD (TWD)' },
+  poet: { sector: 'Tecnología / chips', country: 'Canadá', fx: 'USD' },
+  copx: { sector: 'Materiales / cobre', country: 'Global', fx: 'USD' },
+  pdd: { sector: 'Comercio electrónico', country: 'China', fx: 'USD (CNY)' },
+  googl: { sector: 'Internet / IA', country: 'EE. UU.', fx: 'USD' },
+  sp500: { sector: 'Bolsa diversificada', country: 'EE. UU.', fx: 'USD' },
+  japan: { sector: 'Bolsa diversificada', country: 'Japón', fx: 'JPY' },
+  copper: { sector: 'Materiales / cobre', country: 'Global', fx: 'USD' },
+  mitsu: { sector: 'Conglomerado / materias primas', country: 'Japón', fx: 'JPY' },
+  btc: { sector: 'Cripto', country: 'Global', fx: 'USD' },
+  eth: { sector: 'Cripto', country: 'Global', fx: 'USD' },
+  sol: { sector: 'Cripto', country: 'Global', fx: 'USD' }
+};
+
+// Reuniones de bancos centrales (día de la decisión). Fuentes: federalreserve.gov y ecb.europa.eu (consultadas 26/11/2026).
+window.MACRO_EVENTS = [
+  ['2026-12-09', 'Fed: decisión de tipos (con previsiones)'],
+  ['2026-12-17', 'BCE: decisión de tipos'],
+  ['2027-01-27', 'Fed: decisión de tipos'],
+  ['2027-02-04', 'BCE: decisión de tipos'],
+  ['2027-03-17', 'Fed: decisión de tipos (con previsiones)'],
+  ['2027-03-18', 'BCE: decisión de tipos'],
+  ['2027-04-28', 'Fed: decisión de tipos'],
+  ['2027-04-29', 'BCE: decisión de tipos'],
+  ['2027-06-09', 'Fed: decisión de tipos (con previsiones)'],
+  ['2027-06-10', 'BCE: decisión de tipos'],
+  ['2027-07-22', 'BCE: decisión de tipos'],
+  ['2027-07-28', 'Fed: decisión de tipos'],
+  ['2027-09-09', 'BCE: decisión de tipos'],
+  ['2027-09-15', 'Fed: decisión de tipos (con previsiones)'],
+  ['2027-10-27', 'Fed: reunión de estrategia (sin decisión de tipos)'],
+  ['2027-10-28', 'BCE: decisión de tipos'],
+  ['2027-11-17', 'Fed: decisión de tipos'],
+  ['2027-12-16', 'BCE: decisión de tipos']
+];

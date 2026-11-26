@@ -49,7 +49,7 @@
     return cached(`y:${sym}:${range}:${interval}`, range === 'max' ? 720 : 20, async () => {
       let last;
       for (const host of ['query1', 'query2']) {
-        const r = await http(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}&includePrePost=false`);
+        const r = await http(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}&includePrePost=false&events=div`);
         last = r;
         if (r.status !== 200) continue;
         const j = JSON.parse(r.text);
@@ -59,7 +59,8 @@
         const t = [], c = [];
         (res.timestamp || []).forEach((ts, i) => { const v = q.close && q.close[i]; if (v != null && isFinite(v)) { t.push(ts); c.push(v); } });
         const meta = res.meta || {};
-        return { t, c, meta: { price: meta.regularMarketPrice, prev: meta.chartPreviousClose ?? meta.previousClose, currency: meta.currency, name: meta.longName || meta.shortName, exchange: meta.fullExchangeName } };
+        const div = Object.values((res.events && res.events.dividends) || {}).map(x => ({ t: x.date, amount: x.amount })).sort((a, b) => a.t - b.t);
+        return { t, c, div, meta: { price: meta.regularMarketPrice, prev: meta.chartPreviousClose ?? meta.previousClose, currency: meta.currency, name: meta.longName || meta.shortName, exchange: meta.fullExchangeName } };
       }
       throw new Error('Yahoo no responde (' + (last ? last.status : '?') + ')');
     });
@@ -126,7 +127,55 @@
       return JSON.parse(r.text);
     }).catch(() => null);
   }
+  // Datos de Yahoo que necesitan "crumb" (PER, fechas de resultados, dividendos). Si fallan, se usa lo de la SEC.
+  let crumbP = null;
+  function yahooCrumb() {
+    if (!crumbP) crumbP = (async () => {
+      await http('https://fc.yahoo.com/');
+      const r = await http('https://query2.finance.yahoo.com/v1/test/getcrumb');
+      if (r.status !== 200 || !r.text || r.text.length > 40 || r.text.includes('<')) throw new Error('sin crumb');
+      return r.text.trim();
+    })().catch(e => { crumbP = null; throw e; });
+    return crumbP;
+  }
+  async function yahooSummary(sym) {
+    return cached('ys:' + sym, 360, async () => {
+      const crumb = await yahooCrumb();
+      const r = await http(`https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=summaryDetail,defaultKeyStatistics,financialData,calendarEvents,assetProfile&crumb=${encodeURIComponent(crumb)}`);
+      if (r.status !== 200) throw new Error('Yahoo resumen ' + r.status);
+      const q = JSON.parse(r.text).quoteSummary.result[0];
+      const raw = x => x && typeof x === 'object' ? x.raw : x;
+      const sd = q.summaryDetail || {}, ks = q.defaultKeyStatistics || {}, fd = q.financialData || {}, ce = q.calendarEvents || {}, ap = q.assetProfile || {};
+      const ed = ce.earnings && ce.earnings.earningsDate ? ce.earnings.earningsDate.map(raw).filter(Boolean) : [];
+      return { pe: raw(sd.trailingPE), fpe: raw(sd.forwardPE) || raw(ks.forwardPE), revenueGrowth: raw(fd.revenueGrowth), earningsGrowth: raw(fd.earningsGrowth),
+        divYield: raw(sd.dividendYield) || raw(sd.yield), exDiv: raw(ce.exDividendDate) || raw(sd.exDividendDate), divDate: raw(ce.dividendDate),
+        earnings: ed, sector: ap.sector, country: ap.country, targetPrice: raw(fd.targetMeanPrice), recommendation: fd.recommendationKey };
+    });
+  }
   const isCrypto = a => a.type === 'Cripto';
+  const metaOf = a => Object.assign({ sector: a.type, country: 'Otro', fx: '' }, (window.ASSET_META || {})[a.id], a.meta || {});
+
+  /** Precio, valor en euros y resultado de cada activo (se reutiliza en Cartera, Riesgo y Renta). */
+  async function snapshot(a) {
+    const d = await daily(a);
+    const price = d.meta.price || d.c[d.c.length - 1];
+    const fx = await fxToEur(d.meta.currency);
+    const pos = window.Portfolio.position(a);
+    const value = pos.qty * price * fx;
+    const r = { a, d, price, ccy: d.meta.currency, fx, pos, value };
+    if (pos.qty > 0 && pos.avg > 0) {
+      r.localRet = price / pos.avg - 1;
+      if (pos.costEur) {
+        r.plEur = value - pos.costEur;
+        r.eurRet = value / pos.costEur - 1;
+        r.fxEffect = r.eurRet - r.localRet; // parte de la ganancia o pérdida que viene del cambio de moneda
+      } else {
+        r.plEur = value - pos.qty * pos.avg * fx;
+        r.eurRet = r.localRet;
+      }
+    }
+    return r;
+  }
 
   // ---------- Utilidades de formato ----------
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -167,9 +216,9 @@
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { stack.length = 0; current = { name: b.dataset.tab }; render(); });
   function render() {
     $('#backBtn').classList.toggle('hidden', !stack.length);
-    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (['detalle', 'editar'].includes(current.name) ? 'x' : current.name)));
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (['detalle', 'editar', 'renta'].includes(current.name) ? 'x' : current.name)));
     window.scrollTo(0, 0);
-    ({ cartera: renderPortfolio, detalle: renderDetail, mercado: renderMarket, ajustes: renderSettings, editar: renderEdit })[current.name](current.arg);
+    ({ cartera: renderPortfolio, detalle: renderDetail, mercado: renderMarket, ajustes: renderSettings, editar: renderEdit, riesgo: renderRisk, agenda: renderAgenda, renta: renderTax })[current.name](current.arg);
   }
 
   // ---------- Vista: Cartera ----------
@@ -177,10 +226,12 @@
     $('#title').textContent = 'Mi Cartera';
     view.innerHTML = `
       <div class="card"><div class="muted small">Valor de la cartera</div>
-        <div class="big" id="total">…</div><div id="totalPl" class="small"></div></div>
+        <div class="big" id="total">…</div><div id="totalPl" class="small"></div>
+        <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button></div></div>
       <div class="card" id="alertsCard"><h2>Avisos</h2><div id="alerts" class="muted small">Analizando tus activos…</div></div>
       <div class="card"><h2>Tus activos</h2><div id="list"></div></div>
       <div class="disclaimer">${DISCLAIMER}</div>`;
+    $('#taxBtn').onclick = () => go('renta');
     const list = $('#list');
     list.innerHTML = assets.map(a => `
       <div class="asset" data-id="${esc(a.id)}">
@@ -190,24 +241,23 @@
       </div>`).join('');
     list.querySelectorAll('.asset').forEach(el => el.onclick = () => go('detalle', el.dataset.id));
 
-    let total = 0, invested = 0, missing = 0;
+    let total = 0, invested = 0, plSum = 0, fxSum = 0, missing = 0;
     const alerts = [];
     const fg = { stocks: await fearGreedStocks().catch(() => null), crypto: await fearGreedCrypto().catch(() => null) };
     await Promise.all(assets.map(async a => {
       try {
-        const d = await daily(a);
-        const price = d.meta.price || d.c[d.c.length - 1];
-        const ch = d.meta.prev ? price / d.meta.prev - 1 : null;
-        const ev = A.evaluate(d, { fearGreed: isCrypto(a) ? fg.crypto : fg.stocks });
+        const sn = await snapshot(a);
+        const d = sn.d;
+        const ch = d.meta.prev ? sn.price / d.meta.prev - 1 : null;
+        const ev = A.evaluate(d, { fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules });
         const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
-        $('#px-' + a.id).textContent = num(price) + ' ' + (d.meta.currency || '');
+        $('#px-' + a.id).textContent = num(sn.price) + ' ' + (sn.ccy || '');
         const chEl = $('#ch-' + a.id); chEl.textContent = pctS(ch) + ' hoy'; chEl.className = 'small ' + cls(ch);
-        if (a.qty > 0) {
-          const fx = await fxToEur(d.meta.currency);
-          const val = a.qty * price * fx; total += val;
-          if (a.cost > 0) invested += a.qty * a.cost * fx;
-          const pl = a.cost > 0 ? price / a.cost - 1 : null;
-          $('#sub-' + a.id).innerHTML = `${eur(val)} · <span class="${cls(pl)}">${pl == null ? '' : pctS(pl)}</span>`;
+        if (sn.pos.qty > 0) {
+          total += sn.value;
+          if (sn.plEur != null) { plSum += sn.plEur; invested += sn.value - sn.plEur; }
+          if (sn.fxEffect != null) fxSum += sn.fxEffect * (sn.value - sn.plEur);
+          $('#sub-' + a.id).innerHTML = `${eur(sn.value)}${sn.eurRet != null ? ` · <span class="${cls(sn.eurRet)}">${pctS(sn.eurRet)}</span>` : ''}`;
         }
         ev.alerts.forEach(x => alerts.push({ a, ...x }));
       } catch (e) {
@@ -217,12 +267,16 @@
     }));
     if (current.name !== 'cartera') return;
     $('#total').textContent = total > 0 ? eur(total) : 'Añade tus cantidades';
-    if (invested > 0) { const pl = total - invested; $('#totalPl').innerHTML = `<span class="${cls(pl)}">${pl >= 0 ? '+' : ''}${eur(pl)} (${pctS(pl / invested)})</span> <span class="muted">sobre lo invertido</span>`; }
-    else $('#totalPl').innerHTML = '<span class="muted">Toca un activo y pon cuánto tienes y a qué precio compraste.</span>';
+    if (invested > 0) {
+      $('#totalPl').innerHTML = `<span class="${cls(plSum)}">${plSum >= 0 ? '+' : ''}${eur(plSum)} (${pctS(plSum / invested)})</span> <span class="muted">sobre lo invertido</span>` +
+        (fxSum ? `<div class="muted">De eso, el efecto de la moneda es <span class="${cls(fxSum)}">${fxSum >= 0 ? '+' : ''}${eur(fxSum)}</span> (solo en los activos con el importe pagado en euros).</div>` : '');
+    } else $('#totalPl').innerHTML = '<span class="muted">Toca un activo, entra en «Mi posición» y apunta tus compras.</span>';
     if (missing) $('#totalPl').innerHTML += `<div class="warn">${missing} activo(s) sin datos. Revisa su símbolo en Ajustes.</div>`;
+    const order = { r: 0, g: 1, y: 2 };
+    alerts.sort((x, y) => order[x.kind] - order[y.kind]);
     $('#alerts').innerHTML = alerts.length
       ? alerts.map(x => `<div class="reason"><span class="dot ${x.kind}" style="display:inline-block"></span> <b>${esc(x.a.name)}</b>: ${esc(x.text)}</div>`).join('')
-      : 'Sin cambios destacados en precios ni tendencias.';
+      : 'Sin cambios destacados en precios, tendencias ni en tus precios objetivo.';
   }
 
   // ---------- Vista: Detalle ----------
@@ -256,7 +310,7 @@
     } catch (e) { body.innerHTML = `<div class="card warn">Error: ${esc(e.message)}</div>`; }
   }
 
-  async function gatherExtra(a) {
+  async function gatherExtra(a, d) {
     const [nw, fg, sec, geo] = await Promise.all([
       news(a.news).catch(() => null),
       (isCrypto(a) ? fearGreedCrypto() : fearGreedStocks()).catch(() => null),
@@ -265,21 +319,52 @@
     ]);
     const s = sec && sec.assets && sec.assets[a.sec];
     const funds = sec && sec.funds && sec.funds.positions && sec.funds.positions[a.sec];
-    return { news: nw, fearGreed: fg, insiders: s && s.insiders, filings: s && s.filings, funds, geoNews: geo, sec };
+    const extra = { news: nw, fearGreed: fg, insiders: s && s.insiders, filings: s && s.filings, funds, geoNews: geo, sec, rules: a.rules };
+    if (a.type === 'Acción') {
+      const price = d.meta.price || d.c[d.c.length - 1];
+      extra.valuation = null;
+      if (s && s.ttm && s.ttm.eps) {
+        const w = await yahoo(a.yahoo, 'max', '1wk').catch(() => null);
+        extra.valuation = window.Portfolio.valuation(price, s, w);
+        if (extra.valuation) extra.valuation.source = 'SEC';
+      }
+      const ys = await yahooSummary(a.yahoo).catch(() => null);
+      extra.summary = ys;
+      if (!extra.valuation && ys && (ys.pe || ys.revenueGrowth != null)) {
+        extra.valuation = { eps: ys.pe ? 1 : null, pe: ys.pe || null, growth: ys.revenueGrowth, source: 'Yahoo' };
+        if (ys.pe && ys.revenueGrowth > 0) extra.valuation.peg = ys.pe / (ys.revenueGrowth * 100);
+      }
+      if (extra.valuation && ys) extra.valuation.fpe = ys.fpe;
+    }
+    return extra;
   }
 
   async function tabAnalysis(a, d, body) {
-    const extra = await gatherExtra(a);
+    const extra = await gatherExtra(a, d);
     const ev = A.evaluate(d, extra);
     const m = ev.metrics;
     const notes = await analysisNotes();
     const note = notes && notes.assets && notes.assets[a.id];
+    const imp = A.importantNews(extra.news, 3);
+    const v = extra.valuation;
     body.innerHTML = `
       <div class="signal ${ev.kind}"><div class="small muted">Orientación actual</div><div style="font-size:17px;font-weight:700">${esc(ev.label)}</div>
-        <div class="small muted">Puntuación ${ev.score >= 0 ? '+' : ''}${ev.score.toFixed(1)} (de -6 a +6)</div></div>
+        <div class="small" style="margin-top:4px">${esc(ev.why)}</div>
+        <div class="small muted" style="margin-top:4px">Confianza <b>${ev.confidence.level.toLowerCase()}</b>: ${esc(ev.confidence.text)}</div>
+        <div class="small muted">Puntuación ${ev.score >= 0 ? '+' : ''}${ev.score.toFixed(1)}</div></div>
       ${ev.alerts.length ? `<div class="card"><h2>Qué ha cambiado</h2>${ev.alerts.map(x => `<div class="reason ${x.kind === 'g' ? 'up' : x.kind === 'r' ? 'down' : 'warn'}">${esc(x.text)}</div>`).join('')}</div>` : ''}
+      ${imp.length ? `<div class="card"><h2>Lo importante esta semana</h2>${newsList(imp, 3)}</div>` : ''}
       ${note ? `<div class="card"><h2>Comentario del día <span class="badge">${esc(notes.date || '')}</span></h2><div style="white-space:pre-wrap">${esc(note)}</div></div>` : ''}
       <div class="card"><h2>Por qué</h2>${ev.reasons.map(r => `<div class="reason"><span class="${r.kind === 'g' ? 'up' : r.kind === 'r' ? 'down' : 'warn'}">${r.pts > 0 ? '▲' : r.pts < 0 ? '▼' : '●'}</span> ${esc(r.text)}</div>`).join('')}</div>
+      ${v ? `<div class="card"><h2>Valoración</h2><div class="kv">
+        <div><span>PER (12 meses)</span><b>${v.pe ? num(v.pe, 1) : v.eps != null && v.eps <= 0 ? 'Pérdidas' : '–'}</b></div>
+        <div><span>PER medio histórico</span><b>${v.medianPe ? num(v.medianPe, 1) : '–'}</b></div>
+        <div><span>PER esperado</span><b>${v.fpe ? num(v.fpe, 1) : '–'}</b></div>
+        <div><span>Crecimiento ventas</span><b class="${cls(v.growth)}">${pctS(v.growth)}</b></div>
+        ${v.epsGrowth != null ? `<div><span>Crecimiento BPA</span><b class="${cls(v.epsGrowth)}">${pctS(v.epsGrowth)}</b></div>` : ''}
+        <div><span>PEG</span><b>${v.peg ? num(v.peg, 1) : '–'}</b></div></div>
+        ${v.hist && v.hist.length ? `<div class="small muted" style="margin-top:6px">PER al cierre de cada ejercicio: ${v.hist.map(h => h.fy + ': ' + num(h.pe, 0)).join(' · ')}</div>` : ''}
+        <div class="small muted" style="margin-top:4px">Fuente: ${esc(v.source || '')}${v.asOf ? ', datos hasta ' + esc(v.asOf) : ''}.</div></div>` : ''}
       <div class="card"><h2>Datos clave</h2><div class="kv">
         <div><span>1 semana</span><b class="${cls(m.ch1w)}">${pctS(m.ch1w)}</b></div>
         <div><span>1 mes</span><b class="${cls(m.ch1m)}">${pctS(m.ch1m)}</b></div>
@@ -292,7 +377,7 @@
         <div><span>RSI (14)</span><b>${m.rsi == null ? '–' : m.rsi.toFixed(0)}</b></div>
         <div><span>Volatilidad anual</span><b>${m.vol == null ? '–' : num(m.vol * 100, 0) + '%'}</b></div>
       </div></div>
-      <div class="disclaimer">${DISCLAIMER} La puntuación suma tendencia, RSI, distancia a las medias, tono de las noticias, miedo y codicia, compras de directivos y grandes fondos.</div>`;
+      <div class="disclaimer">${DISCLAIMER} La orientación suma tendencia, RSI, distancia a las medias, valoración, tono de las noticias, miedo y codicia, compras de directivos y grandes fondos. La confianza baja cuando faltan datos o las señales se contradicen.</div>`;
   }
 
   async function tabChart(a, d, body) {
@@ -300,7 +385,7 @@
     const r = current.range || '1A';
     body.innerHTML = `<div class="card"><div class="pills">${ranges.map(([k]) => `<button class="pill ${k === r ? 'on' : ''}" data-r="${k}">${k}</button>`).join('')}</div>
       <div id="chartInfo" class="small muted">&nbsp;</div><canvas id="cv"></canvas>
-      <div class="small muted" style="margin-top:6px"><span style="color:#38bdf8">━</span> precio ${r !== 'MAX' ? '· <span style="color:#f59e0b">━</span> media 50 · <span style="color:#a78bfa">━</span> media 200' : ''}${a.cost > 0 ? ' · <span style="color:#22c55e">┅</span> tu precio de compra' : ''}</div></div>
+      <div class="small muted" style="margin-top:6px"><span style="color:#38bdf8">━</span> precio ${r !== 'MAX' ? '· <span style="color:#f59e0b">━</span> media 50 · <span style="color:#a78bfa">━</span> media 200' : ''}${window.Portfolio.position(a).avg > 0 ? ' · <span style="color:#22c55e">┅</span> tu precio medio de compra' : ''}</div></div>
       <div class="card" id="histCard"></div>`;
     body.querySelectorAll('.pill[data-r]').forEach(b => b.onclick = () => { current.range = b.dataset.r; tabChart(a, d, body); });
     let t, c, overlays = [];
@@ -315,7 +400,7 @@
       t = d.t.slice(i0); c = d.c.slice(i0);
       overlays = [{ v: s50.slice(i0), color: '#f59e0b' }, { v: s200.slice(i0), color: '#a78bfa' }];
     }
-    drawChart($('#cv'), t, c, overlays, a.cost > 0 ? a.cost : null);
+    drawChart($('#cv'), t, c, overlays, window.Portfolio.position(a).avg || null);
     if (t.length) {
       const first = c[0], last = c[c.length - 1];
       $('#histCard').innerHTML = `<h2>Historial ${r === 'MAX' ? 'completo' : r}</h2><div class="kv">
@@ -390,9 +475,12 @@
   async function tabNews(a, body) {
     const items = await news(a.news);
     const s = A.newsSentiment(items);
-    body.innerHTML = `<div class="card"><h2>Noticias de las últimas 2 semanas</h2>
+    const imp = A.importantNews(items, 5);
+    body.innerHTML = `<div class="card"><h2>Lo que cambia algo</h2>
+      ${imp.length ? newsList(imp, 5) : '<div class="muted">Esta semana no hay noticias con impacto claro (resultados, previsiones, contratos, regulación, cambios de directivos…).</div>'}</div>
+      <div class="card"><h2>Resto de noticias (2 semanas)</h2>
       ${s ? `<div class="small muted" style="margin-bottom:6px">Tono: ${s.pos} positivas, ${s.neg} negativas, ${s.n - s.pos - s.neg} neutras (lectura automática de titulares).</div>` : ''}
-      ${newsList(items)}</div>`;
+      <details><summary class="small" style="color:var(--accent)">Ver todas</summary>${newsList(items)}</details></div>`;
   }
   async function geoNews(a) {
     const themes = (a.themes || []).filter(k => window.THEMES[k]);
@@ -446,21 +534,231 @@
       ${pos.length ? `<div class="scroll"><table><tr><th>Fondo</th><th>Movimiento</th><th>Acciones</th><th>Valor</th></tr>
         ${pos.map(p => `<tr><td>${esc(p.fund)}<div class="small muted">${esc(p.manager || '')}</div></td><td class="${ST[p.status] ? ST[p.status][1] : ''}">${ST[p.status] ? ST[p.status][0] : esc(p.status)}${p.changePct != null && isFinite(p.changePct) ? ' ' + pctS(p.changePct) : ''}</td><td>${big(p.shares)}</td><td>${big(p.value)} $</td></tr>`).join('')}</table></div>`
         : '<div class="muted">Ninguno de los fondos seguidos tiene este valor en su último informe.</div>'}
-      <div class="small muted" style="margin-top:8px">Informes 13F del trimestre ${esc((sec.funds && sec.funds.period) || '')}. Se publican hasta 45 días después del cierre del trimestre, así que reflejan el pasado. Fondos seguidos: ${esc(((sec.funds && sec.funds.tracked) || []).join(', '))}.</div></div>`;
+      <div class="small warn" style="margin-top:8px">⚠️ Pista retrasada, no señal de compra: muestran lo que tenían al cierre del trimestre, no lo que tienen hoy.</div><div class="small muted" style="margin-top:4px">Informes 13F del trimestre ${esc((sec.funds && sec.funds.period) || '')}. Se publican hasta 45 días después del cierre del trimestre, así que reflejan el pasado. Fondos seguidos: ${esc(((sec.funds && sec.funds.tracked) || []).join(', '))}.</div></div>`;
   }
 
   function renderPosition(a, d) {
     const body = $('#tabBody');
+    const P = window.Portfolio;
+    const ccy = d ? d.meta.currency || '' : '';
     const price = d ? (d.meta.price || d.c[d.c.length - 1]) : null;
-    const pl = price && a.cost > 0 ? price / a.cost - 1 : null;
-    body.innerHTML = `<div class="card"><h2>Mi posición</h2>
-      <label>Cantidad que tengo (participaciones, acciones o monedas)</label><input id="pQty" type="number" inputmode="decimal" step="any" value="${a.qty || ''}">
-      <label>Precio medio de compra (en ${esc(d ? d.meta.currency || '' : 'la moneda del activo')})</label><input id="pCost" type="number" inputmode="decimal" step="any" value="${a.cost || ''}">
-      ${pl != null ? `<div style="margin-bottom:10px">Resultado: <b class="${cls(pl)}">${pctS(pl)}</b> · valor ${num(a.qty * price)} ${esc(d.meta.currency || '')}</div>` : ''}
-      <label>Mis notas</label><textarea id="pNotes" rows="3">${esc(a.notes || '')}</textarea>
-      <div class="btns"><button class="btn" id="pSave">Guardar</button><button class="btn sec" id="pEdit">Editar símbolo y temas</button></div></div>`;
-    $('#pSave').onclick = () => { a.qty = parseFloat($('#pQty').value) || 0; a.cost = parseFloat($('#pCost').value) || 0; a.notes = $('#pNotes').value; persist(); renderPosition(a, d); toast('Guardado'); };
+    const pos = P.position(a);
+    const rules = a.rules || {};
+    const ops = (a.ops || []).slice().sort((x, y) => y.date.localeCompare(x.date));
+    const pl = price && pos.avg > 0 ? price / pos.avg - 1 : null;
+    body.innerHTML = `
+      <div class="card"><h2>Resumen</h2><div class="kv">
+        <div><span>Cantidad</span><b>${num(pos.qty, pos.qty % 1 ? 4 : 0)}</b></div>
+        <div><span>Precio medio (${esc(ccy)})</span><b>${pos.avg ? num(pos.avg) : '–'}</b></div>
+        <div><span>Resultado en ${esc(ccy)}</span><b class="${cls(pl)}">${pctS(pl)}</b></div>
+        <div><span>Pagado en euros</span><b>${pos.costEur ? eur(pos.costEur) : '–'}</b></div></div>
+        <div id="fxBox" class="small" style="margin-top:8px"></div></div>
+      <div class="card"><h2>Mis operaciones</h2>
+        ${ops.length ? ops.map(o => `<div class="asset"><div class="grow"><b class="${o.type === 'compra' ? 'up' : 'down'}">${o.type === 'compra' ? 'Compra' : 'Venta'}</b> ${num(o.qty, o.qty % 1 ? 4 : 0)} a ${num(o.price)} ${esc(ccy)}
+          <div class="small muted">${esc(o.date)}${o.eur != null ? ' · ' + num(o.eur, 2) + ' €' : ''}</div></div><button class="icon" data-del="${esc(o.id)}">✕</button></div>`).join('')
+          : `<div class="small muted">Apunta cada compra y venta con lo que pagaste o cobraste en euros (con comisiones). Así se calcula la ganancia real, el efecto de la moneda y la renta.</div>`}
+        <h3>Añadir operación</h3>
+        <div class="row"><select id="oType" class="grow"><option value="compra">Compra</option><option value="venta">Venta</option></select>
+          <input id="oDate" type="date" class="grow" value="${new Date().toISOString().slice(0, 10)}"></div>
+        <div class="row"><div class="grow"><label>Cantidad</label><input id="oQty" type="number" inputmode="decimal" step="any"></div>
+          <div class="grow"><label>Precio (${esc(ccy)})</label><input id="oPrice" type="number" inputmode="decimal" step="any"></div></div>
+        <label>Importe total en euros, con comisiones (lo que ves en el bróker)</label><input id="oEur" type="number" inputmode="decimal" step="any">
+        <button class="btn" id="oAdd">Añadir</button></div>
+      ${!ops.length ? `<div class="card"><h2>Modo rápido (sin operaciones)</h2>
+        <label>Cantidad que tengo</label><input id="pQty" type="number" inputmode="decimal" step="any" value="${a.qty || ''}">
+        <label>Precio medio de compra (${esc(ccy)})</label><input id="pCost" type="number" inputmode="decimal" step="any" value="${a.cost || ''}">
+        <label>Total pagado en euros (opcional, para ver el efecto de la moneda)</label><input id="pCostEur" type="number" inputmode="decimal" step="any" value="${a.costEur || ''}">
+        <button class="btn sec" id="pSave">Guardar</button></div>` : ''}
+      <div class="card"><h2>Mis reglas</h2><div class="small muted">Te aviso en la pantalla de Cartera cuando el precio cruce estos niveles (en ${esc(ccy)}).</div>
+        <label>Comprar más si baja de</label><input id="rBuy" type="number" inputmode="decimal" step="any" value="${rules.buyBelow || ''}">
+        <label>Precio objetivo para vender</label><input id="rSell" type="number" inputmode="decimal" step="any" value="${rules.sellAbove || ''}">
+        <label>Precio de salida (stop) si cae por debajo de</label><input id="rStop" type="number" inputmode="decimal" step="any" value="${rules.stopBelow || ''}">
+        <button class="btn sec" id="rSave">Guardar reglas</button></div>
+      <div class="card"><h2>Mis notas</h2><textarea id="pNotes" rows="3">${esc(a.notes || '')}</textarea>
+        <div class="btns"><button class="btn sec" id="nSave">Guardar notas</button><button class="btn sec" id="pEdit">Editar símbolo y temas</button></div></div>`;
+    if (d && pos.qty > 0 && pos.avg > 0) {
+      fxToEur(ccy).then(fx => {
+        const value = pos.qty * price * fx;
+        const box = $('#fxBox'); if (!box) return;
+        if (pos.costEur) {
+          const eurRet = value / pos.costEur - 1, fxEff = eurRet - pl;
+          box.innerHTML = `Valor ${eur(value)} · resultado en euros <b class="${cls(eurRet)}">${pctS(eurRet)}</b> (${value - pos.costEur >= 0 ? '+' : ''}${eur(value - pos.costEur)}).<br>
+            Del precio: <span class="${cls(pl)}">${pctS(pl)}</span> · De la moneda: <span class="${cls(fxEff)}">${pctS(fxEff)}</span>${ccy !== 'EUR' ? ` (si el ${esc(ccy)} se debilita frente al euro, pierdes aunque el precio no baje)` : ''}.`;
+        } else box.innerHTML = `<span class="muted">Valor ${eur(value)}. Apunta el importe pagado en euros para separar el efecto de la moneda.</span>`;
+      }).catch(() => {});
+    }
+    body.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = '¿Borrar?'; return; }
+      a.ops = (a.ops || []).filter(o => o.id !== b.dataset.del); persist(); renderPosition(a, d);
+    });
+    $('#oAdd').onclick = () => {
+      const op = { id: 'o' + Date.now(), type: $('#oType').value, date: $('#oDate').value, qty: parseFloat($('#oQty').value), price: parseFloat($('#oPrice').value) };
+      const e = parseFloat($('#oEur').value); if (isFinite(e)) op.eur = e;
+      if (!op.date || !(op.qty > 0) || !(op.price > 0)) return toast('Faltan fecha, cantidad o precio');
+      if (op.type === 'venta' && op.qty > pos.qty + 1e-9) return toast('Vendes más de lo que tienes');
+      if (!a.ops || !a.ops.length) { // al pasar a operaciones, la posición rápida se convierte en una compra inicial
+        a.ops = [];
+        if (a.qty > 0 && a.cost > 0) a.ops.push({ id: 'o0', type: 'compra', date: '2000-01-01', qty: a.qty, price: a.cost, eur: a.costEur || undefined, initial: true });
+      }
+      a.ops.push(op); persist(); toast('Operación guardada'); renderPosition(a, d);
+    };
+    if ($('#pSave')) $('#pSave').onclick = () => { a.qty = parseFloat($('#pQty').value) || 0; a.cost = parseFloat($('#pCost').value) || 0; a.costEur = parseFloat($('#pCostEur').value) || 0; persist(); renderPosition(a, d); toast('Guardado'); };
+    $('#rSave').onclick = () => { a.rules = { buyBelow: parseFloat($('#rBuy').value) || null, sellAbove: parseFloat($('#rSell').value) || null, stopBelow: parseFloat($('#rStop').value) || null }; persist(); toast('Reglas guardadas'); };
+    $('#nSave').onclick = () => { a.notes = $('#pNotes').value; persist(); toast('Guardado'); };
     $('#pEdit').onclick = () => go('editar', a.id);
+  }
+
+  // ---------- Vista: Riesgo y reparto ----------
+  function bars(rows, fmt) {
+    return rows.map(r => `<div style="margin:6px 0"><div class="row small"><span class="grow">${esc(r.k)}</span><b>${(r.w * 100).toFixed(1)}%</b>${fmt ? `<span class="muted" style="width:70px;text-align:right">${fmt(r.v)}</span>` : ''}</div>
+      <div style="height:6px;background:var(--card2);border-radius:4px"><div style="height:6px;width:${(r.w * 100).toFixed(1)}%;background:var(--accent);border-radius:4px"></div></div></div>`).join('');
+  }
+  async function renderRisk() {
+    $('#title').textContent = 'Reparto y riesgo';
+    const P = window.Portfolio;
+    view.innerHTML = '<div class="loading">Calculando…</div>';
+    const snaps = (await Promise.all(assets.map(a => snapshot(a).catch(() => null)))).filter(Boolean);
+    if (current.name !== 'riesgo') return;
+    const held = snaps.filter(s => s.value > 0);
+    const items = held.map(s => { const m = metaOf(s.a); return { k: s.a.name, name: s.a.name, value: s.value, sector: m.sector, country: m.country, fx: m.fx || s.ccy }; });
+    const byAsset = P.allocation(items.map(i => ({ ...i, asset: i.name })), 'asset');
+    const bySector = P.allocation(items, 'sector'), byCountry = P.allocation(items, 'country'), byFx = P.allocation(items, 'fx');
+    const warns = P.concentrationWarnings(byAsset, bySector, byCountry, byFx);
+    // Riesgo por activo con todo el historial semanal.
+    const rows = await Promise.all(snaps.map(async s => {
+      const w = await yahoo(s.a.yahoo, 'max', '1wk').catch(() => null);
+      const dd = w && w.c.length > 10 ? P.maxDrawdown(w.c, w.t) : null;
+      return { s, dd, vol: A.volatility(s.d.c, 250) };
+    }));
+    const series = {}; snaps.forEach(s => { series[s.a.id] = s.d; });
+    const aligned = P.alignReturns(series, 365);
+    const weights = {}; held.forEach(s => { weights[s.a.id] = s.value; });
+    const pr = P.portfolioRisk(weights, aligned);
+    // Correlaciones.
+    const ids = (held.length >= 2 ? held : snaps).map(s => s.a.id).filter(id => aligned.rets[id]);
+    const name = id => (assets.find(a => a.id === id) || {}).name || id;
+    const pairs = [];
+    const M = {};
+    for (const i of ids) for (const j of ids) {
+      if (i >= j) continue;
+      const c = P.correlation(aligned.rets[i], aligned.rets[j]);
+      M[i + '|' + j] = M[j + '|' + i] = c;
+      if (c != null) pairs.push({ i, j, c });
+    }
+    pairs.sort((x, y) => y.c - x.c);
+    const short = id => (assets.find(a => a.id === id) || {}).yahoo.replace(/\..*$/, '').replace('-USD', '').slice(0, 5);
+    const color = c => c == null ? 'transparent' : c > 0 ? `rgba(239,68,68,${Math.min(1, c) * 0.85})` : `rgba(34,197,94,${Math.min(1, -c) * 0.85})`;
+    const total = held.reduce((s, x) => s + x.value, 0);
+    view.innerHTML = `
+      ${!held.length ? '<div class="card warn">Aún no has puesto cantidades: el reparto aparecerá cuando apuntes tus compras. El riesgo y la correlación se muestran igualmente.</div>' : ''}
+      ${warns.length ? `<div class="card"><h2>Avisos de concentración</h2>${warns.map(w => `<div class="reason warn">${esc(w)}</div>`).join('')}</div>` : held.length ? '<div class="card"><h2>Concentración</h2><div class="small up">Sin concentraciones excesivas.</div></div>' : ''}
+      ${held.length ? `<div class="card"><h2>Reparto por activo</h2>${bars(byAsset, eur)}</div>
+      <div class="card"><h2>Por sector</h2>${bars(bySector)}</div>
+      <div class="card"><h2>Por país</h2>${bars(byCountry)}</div>
+      <div class="card"><h2>Por moneda real</h2>${bars(byFx)}<div class="small muted">Moneda a la que estás expuesta de verdad, aunque el fondo cotice en dólares.</div></div>` : ''}
+      ${pr ? `<div class="card"><h2>Riesgo de tu cartera (último año, con tu reparto actual)</h2><div class="kv">
+        <div><span>Volatilidad anual</span><b>${num(pr.vol * 100, 0)}%</b></div>
+        <div><span>Máxima caída</span><b class="down">${pctS(pr.maxDD)}</b></div>
+        <div><span>Peor día</span><b class="down">${pctS(pr.worstDay)}</b></div>
+        <div><span>Un día malo (1 de cada 20)</span><b class="down">${pctS(pr.var95)} ≈ ${eur(pr.var95 * total)}</b></div></div>
+        <div class="small muted" style="margin-top:6px">Calculado en la moneda de cada activo, sin el efecto del euro.</div></div>` : ''}
+      <div class="card"><h2>Riesgo por activo</h2><div class="scroll"><table><tr><th></th><th>Volat.</th><th>Máx. caída histórica</th><th>Desde máx.</th></tr>
+        ${rows.sort((x, y) => (y.vol || 0) - (x.vol || 0)).map(r => `<tr><td>${esc(r.s.a.name)}</td><td>${r.vol == null ? '–' : num(r.vol * 100, 0) + '%'}</td>
+          <td class="down">${r.dd ? pctS(r.dd.dd) + ' <span class="muted small">' + new Date(r.dd.troughT * 1000).getFullYear() + '</span>' : '–'}</td><td class="${r.dd && r.dd.current < -0.2 ? 'down' : ''}">${r.dd ? pctS(r.dd.current) : '–'}</td></tr>`).join('')}
+        </table></div><div class="small muted" style="margin-top:6px">La máxima caída histórica te dice cuánto puede llegar a bajar en una mala racha. Pregúntate si aguantarías esa caída sin vender.</div></div>
+      ${ids.length >= 2 ? `<div class="card"><h2>Correlación (último año)</h2>
+        <div class="small muted" style="margin-bottom:6px">Cerca de 1 (rojo): se mueven juntos, no diversifican. Cerca de 0 o negativo (verde): se compensan.</div>
+        <div class="scroll"><table style="font-size:10px"><tr><th></th>${ids.map(j => `<th style="writing-mode:vertical-rl;text-align:left;padding:2px">${esc(short(j))}</th>`).join('')}</tr>
+        ${ids.map(i => `<tr><td style="padding:2px 4px">${esc(short(i))}</td>${ids.map(j => { const c = i === j ? 1 : M[i + '|' + j]; return `<td style="padding:2px;text-align:center;background:${color(c)}">${c == null ? '' : (c * 10).toFixed(0)}</td>`; }).join('')}</tr>`).join('')}
+        </table></div><div class="small muted">Valores ×10 (8 = 0,8).</div>
+        <h3>Los que más se mueven juntos</h3>${pairs.slice(0, Math.min(5, Math.max(1, pairs.length - 3))).map(p => `<div class="reason">${esc(name(p.i))} y ${esc(name(p.j))}: <b class="${p.c > 0.7 ? 'down' : ''}">${num(p.c, 2)}</b></div>`).join('')}
+        ${pairs.length >= 8 ? `<h3>Los que más diversifican</h3>${pairs.slice(-3).reverse().map(p => `<div class="reason">${esc(name(p.i))} y ${esc(name(p.j))}: <b class="up">${num(p.c, 2)}</b></div>`).join('')}` : ''}</div>` : ''}
+      <div class="disclaimer">${DISCLAIMER}</div>`;
+  }
+
+  // ---------- Vista: Agenda ----------
+  async function renderAgenda() {
+    $('#title').textContent = 'Agenda';
+    view.innerHTML = '<div class="loading">Buscando fechas…</div>';
+    const today = new Date().toISOString().slice(0, 10);
+    const limit = new Date(Date.now() + 200 * 86400000).toISOString().slice(0, 10);
+    const ev = [];
+    (window.MACRO_EVENTS || []).forEach(([dt, label]) => ev.push({ date: dt, label, kind: 'macro' }));
+    const sec = await secData().catch(() => null);
+    await Promise.all(assets.map(async a => {
+      let gotEarnings = false;
+      if (!isCrypto(a)) {
+        const ys = await yahooSummary(a.yahoo).catch(() => null);
+        if (ys && (a.type === 'Acción' || a.type === 'Fondo cotizado')) {
+          (ys.earnings || []).slice(0, 1).forEach(ts => { ev.push({ date: new Date(ts * 1000).toISOString().slice(0, 10), label: `${a.name}: presenta resultados`, kind: 'res', a }); gotEarnings = true; });
+        }
+        if (ys && ys.exDiv) {
+          ev.push({ date: new Date(ys.exDiv * 1000).toISOString().slice(0, 10), label: `${a.name}: fecha ex-dividendo${ys.divYield ? ' (rent. ' + num(ys.divYield * 100, 1) + '%)' : ''}`, kind: 'div', a });
+        }
+      }
+      const s = a.sec && sec && sec.assets && sec.assets[a.sec];
+      if (!gotEarnings && s && s.nextReport && a.type !== 'ETF') ev.push({ date: s.nextReport.estimate, label: `${a.name}: resultados (fecha estimada)`, kind: 'res', a, est: true });
+      // Dividendos pasados para estimar el siguiente (útil en ETF de distribución).
+      const d = await daily(a).catch(() => null);
+      if (d && d.div && d.div.length >= 2) {
+        const lastD = d.div[d.div.length - 1], prevD = d.div[d.div.length - 2];
+        const step = lastD.t - prevD.t;
+        const next = new Date((lastD.t + step) * 1000).toISOString().slice(0, 10);
+        if (!ev.some(e => e.kind === 'div' && e.a === a && e.date >= today)) ev.push({ date: next, label: `${a.name}: próximo dividendo (estimado, último ${num(lastD.amount, 3)} ${esc(d.meta.currency || '')})`, kind: 'div', a, est: true });
+      }
+    }));
+    if (current.name !== 'agenda') return;
+    const up = ev.filter(e => e.date >= today && e.date <= limit).sort((x, y) => x.date.localeCompare(y.date));
+    const icon = { macro: '🏦', res: '📊', div: '💶' };
+    let lastMonth = '';
+    view.innerHTML = `<div class="card"><h2>Próximos 6 meses</h2>
+      ${up.map(e => {
+        const dt = new Date(e.date + 'T12:00:00');
+        const month = dt.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+        const head = month !== lastMonth ? `<h3 style="text-transform:capitalize">${month}</h3>` : '';
+        lastMonth = month;
+        const days = Math.round((dt - Date.now()) / 86400000);
+        return head + `<div class="reason">${icon[e.kind]} <b>${dt.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric' })}</b> ${esc(e.label)}${e.est ? ' <span class="badge">estimada</span>' : ''} <span class="muted small">${days <= 0 ? 'hoy' : 'en ' + days + ' d'}</span></div>`;
+      }).join('') || '<div class="muted">Sin fechas.</div>'}</div>
+      <div class="small muted">Las fechas de resultados y dividendos son de Yahoo Finance cuando están disponibles; si no, se estiman a partir de la última presentación. Las de la Fed y el BCE son oficiales. Antes de un resultado o una decisión de tipos el precio suele moverse más de lo normal.</div>`;
+  }
+
+  // ---------- Vista: Renta ----------
+  function renderTax() {
+    $('#title').textContent = 'Renta y plusvalías';
+    const P = window.Portfolio;
+    const all = [];
+    assets.forEach(a => P.position(a).realized.forEach(r => all.push({ a, ...r })));
+    const years = [...new Set(all.map(r => r.year))].sort((x, y) => y - x);
+    const yr = current.year || years[0] || new Date().getFullYear();
+    const rows = all.filter(r => r.year === yr).sort((x, y) => x.date.localeCompare(y.date));
+    const known = rows.filter(r => r.gainEur != null);
+    const gains = known.filter(r => r.gainEur > 0).reduce((s, r) => s + r.gainEur, 0);
+    const losses = known.filter(r => r.gainEur < 0 && !r.washRisk).reduce((s, r) => s + r.gainEur, 0);
+    const blocked = known.filter(r => r.gainEur < 0 && r.washRisk).reduce((s, r) => s + r.gainEur, 0);
+    const net = gains + losses;
+    const tax = P.savingsTax(net);
+    const csv = ['Activo;Fecha venta;Cantidad;Valor transmisión €;Valor adquisición €;Ganancia/pérdida €']
+      .concat(rows.map(r => [r.a.name, r.date, r.qty, r.proceedsEur ?? '', r.costEur != null ? r.costEur.toFixed(2) : '', r.gainEur != null ? r.gainEur.toFixed(2) : ''].join(';'))).join('\n');
+    view.innerHTML = `
+      <div class="pills">${(years.length ? years : [yr]).map(y => `<button class="pill ${y === yr ? 'on' : ''}" data-y="${y}">${y}</button>`).join('')}</div>
+      <div class="card"><h2>Resumen ${yr}</h2><div class="kv">
+        <div><span>Ganancias</span><b class="up">${eur(gains)}</b></div>
+        <div><span>Pérdidas compensables</span><b class="down">${eur(losses)}</b></div>
+        <div><span>Saldo neto</span><b class="${cls(net)}">${eur(net)}</b></div>
+        <div><span>Impuesto estimado</span><b>${eur(tax)}</b></div></div>
+        ${blocked ? `<div class="small warn" style="margin-top:8px">${eur(blocked)} de pérdidas no se pueden compensar todavía por la regla de los 2 meses (recompraste el mismo valor 2 meses antes o después). Se podrán usar cuando vendas esas acciones recompradas.</div>` : ''}
+        ${net < 0 ? '<div class="small muted" style="margin-top:6px">Un saldo negativo se puede compensar con ganancias de los 4 años siguientes (y hasta un 25% con rendimientos como dividendos o intereses).</div>' : ''}
+        <div class="small muted" style="margin-top:6px">Tramos del ahorro: 19% hasta 6.000 €, 21% hasta 50.000 €, 23% hasta 200.000 €, 27% hasta 300.000 €, 30% el resto. Se calcula por FIFO (primero en entrar, primero en salir), como exige Hacienda.</div></div>
+      <div class="card"><h2>Ventas de ${yr}</h2>
+        ${rows.length ? rows.map(r => `<div class="reason"><b>${esc(r.a.name)}</b> <span class="muted small">${esc(r.date)}</span><div class="small">
+          Vendes ${num(r.qty, r.qty % 1 ? 4 : 0)} · cobras ${r.proceedsEur != null ? eur(r.proceedsEur) : '?'} · te costaron ${r.costEur != null ? eur(r.costEur) : '?'} ·
+          <b class="${cls(r.gainEur)}">${r.gainEur != null ? (r.gainEur >= 0 ? '+' : '') + eur(r.gainEur) : 'falta el importe en euros'}</b>
+          ${r.washRisk ? ' <span class="badge">regla 2 meses</span>' : ''}${r.oversold ? ' <span class="badge">vendes más de lo apuntado</span>' : ''}${isCrypto(r.a) ? ' <span class="badge">cripto</span>' : ''}</div></div>`).join('')
+          : '<div class="muted">No hay ventas apuntadas este año. Apunta tus ventas en cada activo, en «Mi posición».</div>'}</div>
+      <div class="card"><h2>Para el borrador de la renta</h2><div class="small muted">Copia esta tabla; tiene los datos que pide la declaración por cada venta.</div><textarea rows="5" readonly>${esc(csv)}</textarea></div>
+      <div class="disclaimer">Estimación orientativa. No incluye dividendos, intereses ni otras rentas del ahorro, ni deducciones. Las criptomonedas también tributan por FIFO; las permutas entre criptos también generan ganancia o pérdida. Consúltalo con un asesor fiscal o con el borrador de Hacienda.</div>`;
+    view.querySelectorAll('[data-y]').forEach(b => b.onclick = () => { current.year = +b.dataset.y; renderTax(); });
   }
 
   // ---------- Vista: Mercado ----------
