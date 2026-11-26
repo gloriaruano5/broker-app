@@ -364,12 +364,22 @@
   function priceRanges(w, price, calib) {
     const c = w && w.c;
     if (!c || c.length < 30 || !(price > 0)) return null;
-    const start = Math.max(1, c.length - 156);
-    const lr = [];
-    for (let i = start; i < c.length; i++) if (c[i] > 0 && c[i - 1] > 0) lr.push(Math.max(-0.7, Math.min(0.7, Math.log(c[i] / c[i - 1]))));
+    // Últimos 3 años. La separación real entre puntos se mide con las fechas: a veces Yahoo devuelve datos mensuales
+    // aunque se pidan semanales, y tratarlos como semanas inflaba los rangos al doble.
+    const t = w.t || [];
+    const t0 = t.length === c.length ? t[t.length - 1] - 3 * 365 * 86400 : null;
+    let start = Math.max(1, c.length - 156);
+    if (t0 != null) { start = 1; while (start < c.length - 1 && t[start - 1] < t0) start++; }
+    const lr = [], gaps = [];
+    for (let i = start; i < c.length; i++) if (c[i] > 0 && c[i - 1] > 0) {
+      const dt = t.length === c.length ? (t[i] - t[i - 1]) / 86400 : 7;
+      if (dt < 3) continue; // punto duplicado de la semana en curso
+      lr.push(Math.max(-0.7, Math.min(0.7, Math.log(c[i] / c[i - 1])))); gaps.push(dt);
+    }
     if (lr.length < 26) return null;
+    const step = gaps.slice().sort((x, y) => x - y)[gaps.length >> 1] || 7;
     const m = lr.reduce((x, y) => x + y, 0) / lr.length;
-    const sdW = Math.sqrt(lr.reduce((x, y) => x + (y - m) ** 2, 0) / (lr.length - 1));
+    const sdW = Math.sqrt(lr.reduce((x, y) => x + (y - m) ** 2, 0) / (lr.length - 1) * 7 / step);
     const z = 1.2816; // percentiles 10 y 90
     const out = [];
     for (const [weeks, label] of [[4, '1 mes'], [13, '3 meses'], [52, '12 meses']]) {
@@ -383,7 +393,7 @@
       const z0 = weeks === 52 ? 1.45 : z; // a 12 meses la prueba histórica dio 75% de aciertos con 1,28: se amplía
       const zl = k ? Math.max(-lim, Math.min(-0.5, k.q10)) : -z0, zh = k ? Math.min(lim, Math.max(0.5, k.q90)) : z0;
       const low = price * Math.exp(zl * sd), high = price * Math.exp(zh * sd);
-      out.push({ weeks, label, low, mid: price, high, lowPct: low / price - 1, midPct: 0, highPct: high / price - 1, volYear: sdW * Math.sqrt(52), years: Math.round(lr.length / 52), calibrated: !!k, coverage: k ? k.coverage : null });
+      out.push({ weeks, label, low, mid: price, high, lowPct: low / price - 1, midPct: 0, highPct: high / price - 1, volYear: sdW * Math.sqrt(52), years: Math.round(lr.length * step / 365), calibrated: !!k, coverage: k ? k.coverage : null });
     }
     return out;
   }

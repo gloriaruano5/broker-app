@@ -11,11 +11,11 @@
   function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* lleno: se ignora */ } }
   let assets = load('assets', null) || window.DEFAULT_ASSETS.map(a => Object.assign({ qty: 0, cost: 0 }, a));
   // Si la lista inicial se corrige (símbolos, ISIN), se actualiza en el móvil sin tocar cantidades ni operaciones.
-  const DEFAULTS_VERSION = 4;
+  const DEFAULTS_VERSION = 5;
   if (load('defaultsVersion', 1) < DEFAULTS_VERSION) {
     assets.forEach(a => {
       const def = window.DEFAULT_ASSETS.find(d => d.id === a.id);
-      if (def) ['yahoo', 'note', 'isin', 'name', 'resolveIsin'].forEach(k => { if (def[k] !== undefined) a[k] = def[k]; else if (k !== 'name') delete a[k]; });
+      if (def) { ['yahoo', 'alt', 'note', 'isin', 'name', 'resolveIsin'].forEach(k => { if (def[k] !== undefined) a[k] = def[k]; else if (k !== 'name') delete a[k]; }); delete a.resolved; delete a.resolveAt; }
     });
     // Activos nuevos de la lista inicial que aún no estén en el móvil.
     window.DEFAULT_ASSETS.forEach((d, i) => { if (!assets.some(a => a.id === d.id)) assets.splice(Math.min(i, assets.length), 0, Object.assign({ qty: 0, cost: 0 }, d)); });
@@ -93,14 +93,34 @@
   }
   async function daily(a) {
     if (a.resolveIsin && a.isin && !a.resolved) await resolveListing(a).catch(() => {});
-    return yahoo(a.yahoo, '2y', '1d');
+    let d = null, err = null;
+    try { d = await yahoo(a.yahoo, '2y', '1d'); } catch (e) { err = e; }
+    // Si la cotización elegida falla o casi no tiene historial, se prueba otra bolsa del mismo ISIN (como mucho cada 12 h).
+    if ((!d || d.c.length < 100) && (a.isin || a.alt) && !(a.resolveAt > Date.now() - 12 * 3600e3)) {
+      const was = a.yahoo; await resolveListing(a).catch(() => {});
+      if (a.yahoo !== was) { try { d = await yahoo(a.yahoo, '2y', '1d'); err = null; } catch (e) { err = e; } }
+    }
+    if (!d) throw err || new Error('sin datos');
+    return d;
   }
-  /** Busca por ISIN la cotización en euros (Xetra, luego otras bolsas alemanas) y la guarda. */
+  /** Busca la cotización del mismo ISIN con historial suficiente: primero en euros (Xetra y otras bolsas alemanas), luego el resto. */
   async function resolveListing(a) {
-    const r = await http(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(a.isin)}&quotesCount=15&newsCount=0`);
-    const quotes = (JSON.parse(r.text).quotes || []).map(q => q.symbol).filter(Boolean);
-    const pick = quotes.find(s => s.endsWith('.DE')) || quotes.find(s => /\.(F|MU|SG|DU|BE|HM)$/.test(s)) || quotes.find(s => /\.(MI|AS|PA)$/.test(s)) || quotes[0];
-    if (pick) { a.yahoo = pick; a.resolved = true; persist(); }
+    a.resolveAt = Date.now();
+    let found = [];
+    if (a.isin) try {
+      const r = await http(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(a.isin)}&quotesCount=15&newsCount=0`);
+      found = (JSON.parse(r.text).quotes || []).map(q => q.symbol).filter(Boolean);
+    } catch (e) {}
+    const rank = s => s.endsWith('.DE') ? 0 : /\.(F|MU|SG|DU|BE|HM)$/.test(s) ? 1 : /\.(MI|AS|PA)$/.test(s) ? 2 : 3;
+    const cands = [...new Set([...(a.alt || []), ...found.sort((x, y) => rank(x) - rank(y)), a.yahoo])].slice(0, 8);
+    for (const sym of cands) {
+      try {
+        const d = await yahoo(sym, '2y', '1d');
+        if (d.c.length >= 200 && Date.now() / 1000 - d.t[d.t.length - 1] < 7 * 86400) { a.yahoo = sym; a.resolved = true; persist(); return sym; }
+      } catch (e) {}
+    }
+    persist();
+    return null;
   }
 
   async function fxToEur(ccy) {
@@ -431,7 +451,12 @@
           if (!rg) it.issues.push('no se pudo calcular hasta dónde podría llegar');
           else {
             it.range = [rg[2].lowPct, rg[2].highPct];
-            if (rg[2].highPct > 2.5 || rg[2].lowPct < -0.9 || rg[0].highPct > 0.6) it.issues.push(`rango a 12 meses poco razonable (${pctS(rg[2].lowPct)} / ${pctS(rg[2].highPct)})`);
+            // Los activos muy volátiles tienen rangos amplios de verdad: solo se avisa si el rango no cuadra con lo que se mueve el precio cada día (señal de datos rotos).
+            const lr = []; for (let i = Math.max(1, d.c.length - 252); i < d.c.length; i++) if (d.c[i] > 0 && d.c[i - 1] > 0) lr.push(Math.log(d.c[i] / d.c[i - 1]));
+            const mu = lr.reduce((x, y) => x + y, 0) / (lr.length || 1);
+            const volD = lr.length > 60 ? Math.sqrt(lr.reduce((x, y) => x + (y - mu) ** 2, 0) / (lr.length - 1) * (isCrypto(a) ? 365 : 252)) : null;
+            const volR = rg[2].volYear;
+            if (volR > 2.5 || (volD && (volR > volD * 1.7 + 0.1 || volR < volD / 1.7 - 0.1))) it.issues.push(`rango a 12 meses que no cuadra con su volatilidad (${pctS(rg[2].lowPct)} / ${pctS(rg[2].highPct)})`);
           }
           if (w && w.t.length) it.since = w.t[0];
           it.price = price; it.ccy = d.meta.currency;
@@ -1114,7 +1139,7 @@
       for (let i = i0 + 1; i < w.t.length; i++) if (w.t[i] > a1 && w.c[i] >= w.c[i0]) return Math.round((w.t[i] - w.t[i0]) / 2629800);
       return null;
     };
-    const vol = w => { if (!w || w.c.length < 60) return null; const c = w.c.slice(-260); const lr = []; for (let i = 1; i < c.length; i++) lr.push(Math.log(c[i] / c[i - 1])); const m = lr.reduce((x, y) => x + y, 0) / lr.length; return Math.sqrt(lr.reduce((x, y) => x + (y - m) ** 2, 0) / (lr.length - 1) * 52); };
+    const vol = w => { if (!w || w.c.length < 30) return null; const r = A.priceRanges(w, w.c[w.c.length - 1]); return r ? r[0].volYear : null; };
     const ws = {}; await Promise.all(held.map(async s => { ws[s.a.id] = await yahoo(s.a.yahoo, 'max', '1wk').catch(() => null); }));
     const vSpx = vol(spx), vBtc = vol(btc);
     const res = CRISES.map(([name, d0, d1, why]) => {
