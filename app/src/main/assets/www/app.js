@@ -1314,7 +1314,8 @@
       ${notifCard()}
       <div class="card"><h2>Fuentes</h2><div class="small muted">Precios: Yahoo Finance. Noticias: Google Noticias. Miedo y codicia: CNN y alternative.me. Cuentas, directivos y 13F: SEC EDGAR.</div></div>
       <div class="disclaimer">${DISCLAIMER}</div>
-      <div class="btns"><button class="btn danger" id="resetBtn">Restaurar lista inicial</button></div>`;
+      <div class="btns"><button class="btn danger" id="resetBtn">Restaurar lista inicial</button></div>
+      <div class="small muted" style="text-align:center;margin:14px 0">Mi Cartera · versión ${esc((() => { try { return window.NativeNotif.version(); } catch (e) { return 'web'; } })() || '–')}</div>`;
     view.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => go('editar', b.dataset.ed));
     bindNotif();
     view.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [assets[i - 1], assets[i]] = [assets[i], assets[i - 1]]; persist(); renderSettings(); } });

@@ -121,6 +121,11 @@ public class MainActivity extends Activity {
         public String status() { return AlertJob.status(MainActivity.this); }
 
         @JavascriptInterface
+        public String version() {
+            try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return ""; }
+        }
+
+        @JavascriptInterface
         public void askPermission() {
             if (Build.VERSION.SDK_INT >= 33 && !AlertJob.allowed(MainActivity.this))
                 main.post(() -> requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7));
