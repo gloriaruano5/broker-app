@@ -56,10 +56,11 @@ for (let i = 0; i < list.length; i += 4) {
     const mu = lr.reduce((x, y) => x + y, 0) / lr.length, sd = Math.sqrt(lr.reduce((x, y) => x + (y - mu) ** 2, 0) / (lr.length - 1));
     const px = h.c[h.c.length - 1];
     out.push({ sym: u.sym, name: u.name, sector: u.sector, idx: u.idx, score: Math.round(ev.score * 100) / 100, label: ev.label, kind: ev.kind, b,
-      px, limit: Math.round(px * Math.exp(-0.7 * sd * Math.sqrt(5)) * 100) / 100, y1: A.changeSince(h.t, h.c, 365) });
+      px, vol: Math.round(sd * Math.sqrt(252) * 100) / 100, limit: Math.round(px * Math.exp(-0.7 * sd * Math.sqrt(5)) * 100) / 100, y1: A.changeSince(h.t, h.c, 365) });
   }));
 }
-out.sort((x, y) => y.score - x.score || (y.y1 || 0) - (x.y1 || 0));
+// A igual señal, primero los más estables (menos volatilidad): las subidas enormes del último año suelen venir con caídas enormes.
+out.sort((x, y) => y.score - x.score || x.vol - y.vol);
 const res = { date: new Date().toISOString().slice(0, 10), scanned: ok, failed: fail, favorable: out.length, ccy: 'USD', top: out.slice(0, 40) };
 fs.writeFileSync(new URL('../data/scan.json', import.meta.url), JSON.stringify(res));
 const text = `Revisadas ${ok} empresas (${fail} sin datos). Favorables: ${out.length}. Primeras: ${out.slice(0, 10).map(x => x.sym + ' ' + x.score).join(', ')}`;
