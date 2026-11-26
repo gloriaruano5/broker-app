@@ -429,9 +429,11 @@
 
   // ---------- Comprobación automática de datos (en el móvil, que sí accede a los precios) ----------
   let checking = null;
+  const CHECK_V = 2;
   async function dataCheck(force) {
     const last = load('dataCheck', null);
-    if (!force && last && Date.now() - last.at < 4 * 3600e3) return last;
+    // CHECK_V cambia cuando cambia la forma de comprobar: así, al actualizar la app, se descarta el resultado viejo y se recalcula.
+    if (!force && last && last.v === CHECK_V && Date.now() - last.at < 4 * 3600e3) return last;
     if (checking) return checking;
     checking = (async () => {
       const items = [];
@@ -463,7 +465,7 @@
         } catch (e) { it.issues.push('sin datos (' + e.message + ')'); }
         items.push(it);
       }
-      const res = { at: Date.now(), items };
+      const res = { at: Date.now(), v: CHECK_V, items };
       save('dataCheck', res);
       return res;
     })();
