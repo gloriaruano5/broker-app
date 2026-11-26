@@ -25,7 +25,7 @@ jobs:
           python-version: '3.12'
       - name: Descargar datos de la SEC
         env:
-          SEC_CONTACT: ${{ secrets.SEC_CONTACT }}
+          SEC_CONTACT: ${{ secrets.SEC_CONTACT || vars.SEC_CONTACT }}
         run: python scripts/update_sec.py
       - name: Guardar cambios
         run: |
