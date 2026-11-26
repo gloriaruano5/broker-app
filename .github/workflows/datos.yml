@@ -1,0 +1,38 @@
+name: Actualizar datos oficiales (SEC)
+
+on:
+  schedule:
+    - cron: '30 5 * * *'   # cada día a las 6:30 (hora de España en invierno)
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['scripts/**', '.github/workflows/datos.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: datos
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Descargar datos de la SEC
+        env:
+          SEC_CONTACT: ${{ secrets.SEC_CONTACT }}
+        run: python scripts/update_sec.py
+      - name: Guardar cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          git add data/sec.json
+          git diff --cached --quiet && echo "Sin cambios" && exit 0
+          git commit -m "Datos SEC $(date -u +%F)"
+          git pull --rebase origin main
+          git push

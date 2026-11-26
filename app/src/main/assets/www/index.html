@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mi Cartera</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header id="top">
+    <button id="backBtn" class="icon hidden" aria-label="Volver">‹</button>
+    <h1 id="title">Mi Cartera</h1>
+    <button id="refreshBtn" class="icon" aria-label="Actualizar">⟳</button>
+  </header>
+  <main id="view"></main>
+  <nav id="tabs">
+    <button data-tab="cartera" class="on">💼<span>Cartera</span></button>
+    <button data-tab="mercado">🌍<span>Mercado</span></button>
+    <button data-tab="ajustes">⚙️<span>Ajustes</span></button>
+  </nav>
+  <script src="assets.js"></script>
+  <script src="analysis.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

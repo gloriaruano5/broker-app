@@ -1,0 +1,32 @@
+{
+  "tickers": ["NVDA", "VST", "MP", "RDDT", "Q", "DXYZ", "TSM", "POET", "PDD", "GOOGL"],
+  "ciks": {},
+  "match": {
+    "NVDA": {"pattern": "^NVIDIA", "cusips": ["67066G104"]},
+    "VST": {"pattern": "^VISTRA", "cusips": ["92840M102"]},
+    "MP": {"pattern": "^MP MATERIALS", "cusips": ["553368101"]},
+    "RDDT": {"pattern": "^REDDIT", "cusips": ["75734B100"]},
+    "Q": {"pattern": "^QNITY"},
+    "DXYZ": {"pattern": "^DESTINY TECH"},
+    "TSM": {"pattern": "^TAIWAN SEMICONDUCTOR", "cusips": ["874039100"]},
+    "POET": {"pattern": "^POET TECH"},
+    "PDD": {"pattern": "^PDD HOLDINGS|^PINDUODUO", "cusips": ["722304102"]},
+    "GOOGL": {"pattern": "^ALPHABET", "cusips": ["02079K305", "02079K107"]}
+  },
+  "funds": [
+    {"name": "Berkshire Hathaway (Buffett)", "cik": 1067983},
+    {"name": "Scion (Michael Burry)", "cik": 1649339},
+    {"name": "Pershing Square (Ackman)", "cik": 1336528},
+    {"name": "Duquesne (Druckenmiller)", "cik": 1536411},
+    {"name": "Bridgewater (Dalio)", "cik": 1350694},
+    {"name": "Renaissance Technologies", "cik": 1037389},
+    {"name": "Appaloosa (Tepper)", "cik": 1656456},
+    {"name": "Soros Fund Management", "cik": 1029160},
+    {"name": "Third Point (Loeb)", "cik": 1040273},
+    {"name": "Tiger Global", "cik": 1167483},
+    {"name": "Coatue", "cik": 1135730},
+    {"name": "Viking Global", "cik": 1103804},
+    {"name": "Lone Pine", "cik": 1061165},
+    {"name": "ARK Invest (Cathie Wood)", "cik": 1697748}
+  ]
+}
