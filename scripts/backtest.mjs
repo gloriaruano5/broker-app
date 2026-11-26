@@ -53,12 +53,44 @@ async function coinbase(sym) {
   const ts = [...out.keys()].sort((a, b) => a - b);
   return { t: ts, c: ts.map(x => out.get(x)), src: 'Coinbase' };
 }
+const PROXY = { gold: 'GLD', water: 'CGW', china: 'MCHI', copx: 'COPX', sp500: 'SPY', japan: 'EWJ', copper: 'CPER' };
 async function history(a) {
   const errs = [];
   if (a.yahoo.endsWith('-USD')) { const r = await coinbase(a.yahoo); if (!r.err) return r; errs.push(r.err); }
   const y = await yahoo(a.yahoo); if (!y.err) return y; errs.push(y.err);
   if (!a.yahoo.includes('.') && !a.yahoo.includes('-')) { const r = await nasdaq(a.yahoo); if (!r.err) return r; errs.push(r.err); }
+  if (PROXY[a.id]) { const r = await nasdaq(PROXY[a.id], 'etf'); if (!r.err) { r.src = 'Nasdaq ' + PROXY[a.id] + ' (equivalente en EE. UU.)'; return r; } errs.push(r.err); }
   return { err: errs.join(', ') };
+}
+// Estudio de factores: qué parte de la señal ayuda de verdad (rentabilidad a 3 meses frente a la media del activo).
+const FACT = {};
+function factorStudy(h) {
+  const c = h.c, t = h.t, n = c.length, s50 = A.sma(c, 50), s200 = A.sma(c, 200), r = A.rsi(c, 14);
+  const pts = [];
+  for (let i = 260; i + 63 < n; i += 5) pts.push(i);
+  if (!pts.length) return;
+  const f = i => c[i + 63] / c[i] - 1;
+  const base = pts.reduce((x, i) => x + f(i), 0) / pts.length;
+  const split = Date.parse('2022-01-01') / 1000;
+  const feats = i => {
+    const d = c[i] / s200[i] - 1, out = [];
+    out.push(c[i] > s200[i] ? 'precio>MA200' : 'precio<MA200');
+    out.push(s50[i] > s200[i] ? 'MA50>MA200' : 'MA50<MA200');
+    out.push(r[i] >= 75 ? 'RSI>=75' : r[i] >= 70 ? 'RSI70-75' : r[i] <= 25 ? 'RSI<=25' : r[i] <= 30 ? 'RSI25-30' : 'RSI30-70');
+    out.push(d > 0.35 ? 'dist200>+35%' : d > 0.15 ? 'dist200 +15..35%' : d < -0.25 ? 'dist200<-25%' : 'dist200 -25..+15%');
+    if (c[i] > s200[i] && r[i] >= 70) out.push('alcista+RSI>=70');
+    if (c[i] > s200[i] && r[i] <= 40) out.push('alcista+RSI<=40');
+    if (c[i] < s200[i] && r[i] <= 30) out.push('bajista+RSI<=30');
+    const ch3 = c[i] / c[Math.max(0, i - 63)] - 1, ch12 = c[i] / c[Math.max(0, i - 252)] - 1;
+    out.push(ch12 > 0 ? 'mom12m>0' : 'mom12m<0');
+    out.push(ch3 > 0 ? 'mom3m>0' : 'mom3m<0');
+    return out;
+  };
+  for (const i of pts) {
+    if (s200[i] == null || r[i] == null) continue;
+    const ex = f(i) - base, per = t[i] < split ? 'a' : 'b';
+    for (const k of feats(i)) { const o = FACT[k] || (FACT[k] = { a: [0, 0], b: [0, 0], assets: new Set() }); o[per][0] += ex; o[per][1]++; o.assets.add(h.id); }
+  }
 }
 
 const pc = x => x == null ? '–' : (x >= 0 ? '+' : '') + (x * 100).toFixed(1) + '%';
@@ -70,6 +102,7 @@ const cover = { 4: [], 13: [], 52: [] };
 for (const a of DEFAULT_ASSETS) {
   const h = await history(a);
   if (h.err || h.c.length < 400) { lines.push(`■ ${a.name}: sin historial suficiente (${h.err || h.c.length + ' días'})`); continue; }
+  h.id = a.id; factorStudy(h);
   const bt = A.backtest(h);
   if (!bt) { lines.push(`■ ${a.name}: historial corto`); continue; }
   result.assets[a.id] = { src: h.src, days: h.c.length, ...bt };
@@ -89,6 +122,9 @@ for (const [k, nm] of A.BUCKETS) {
 }
 for (const w of [4, 13, 52]) if (cover[w].length) lines.push(`  Rango ${w} semanas: el precio acabó dentro el ${(cover[w].reduce((x, y) => x + y, 0) / cover[w].length * 100).toFixed(0)}% de las veces (objetivo 80%)`);
 result.summary = { pool: Object.fromEntries(Object.entries(pool).map(([k, L]) => { const N = L.reduce((x, y) => x + y.n, 0); return [k, N ? { n: N, edge: L.reduce((x, y) => x + y.avg * y.n, 0) / N } : null]; })), coverage: Object.fromEntries(Object.entries(cover).map(([w, L]) => [w, L.length ? L.reduce((x, y) => x + y, 0) / L.length : null])) };
+lines.push('');
+lines.push('FACTORES (ventaja a 3 meses frente a la media del activo; antes de 2022 | desde 2022; n = semanas):');
+for (const [k, o] of Object.entries(FACT).sort()) lines.push(`  ${k.padEnd(20)} ${o.a[1] ? pc(o.a[0] / o.a[1]) : '–'} (n=${o.a[1]}) | ${o.b[1] ? pc(o.b[0] / o.b[1]) : '–'} (n=${o.b[1]}) · ${o.assets.size} activos`);
 const text = lines.join('\n');
 console.log(text);
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '```\n' + text + '\n```\n');
