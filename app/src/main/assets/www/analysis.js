@@ -376,7 +376,9 @@
       const sd = sdW * Math.sqrt(weeks);
       // Si hay calibración (medida en su propio historial), se usan los percentiles 10 y 90 reales en vez de la campana teórica.
       // Solo si hay bastantes casos independientes; a 12 meses se limita para no extrapolar rachas pasadas.
-      const k = calib && calib[weeks] && calib[weeks].indep >= ({ 4: 30, 13: 20, 52: 12 })[weeks] ? calib[weeks] : null;
+      // La prueba sin mirar al futuro (scripts/ml_eval.py, 1.717 puntos) mostró que calibrar con el propio historial
+      // empeoraba los rangos en 16-17 de 19 activos: se usa la campana simple, que acertó el 80-81%.
+      const k = null;
       const lim = weeks === 52 ? 1.8 : 2.5;
       const z0 = weeks === 52 ? 1.45 : z; // a 12 meses la prueba histórica dio 75% de aciertos con 1,28: se amplía
       const zl = k ? Math.max(-lim, Math.min(-0.5, k.q10)) : -z0, zh = k ? Math.min(lim, Math.max(0.5, k.q90)) : z0;
