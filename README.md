@@ -4,7 +4,7 @@ App Android para seguir mis inversiones (acciones, ETFs, materias primas y cript
 
 ## Qué hace
 - **Cartera**: valor total en euros, ganancia o pérdida y avisos de cambios.
-- **Por activo**: análisis orientativo (tendencia, RSI, medias, FOMO, noticias, directivos, grandes fondos), gráfica con historial completo, noticias, geopolítica, cuentas anuales, movimientos de directivos y fondos 13F.
+- **Por activo**: análisis orientativo (tendencia, RSI, medias, FOMO, noticias, directivos, grandes fondos), gráfica interactiva (velas de 15 min a 1 mes, zoom con dos dedos, volumen, MA/EMA/BOLL/SAR/tendencia, KDJ/RSI/MACD) con historial completo, noticias, geopolítica, cuentas anuales, movimientos de directivos y fondos 13F.
 - **Riesgo**: reparto por activo, sector, país y moneda con avisos de concentración; volatilidad y máxima caída por activo y de la cartera; correlación entre activos.
 - **Agenda**: resultados, dividendos y reuniones de la Fed y el BCE.
 - **Renta**: operaciones de compra y venta, plusvalías por FIFO, regla de los 2 meses y estimación del IRPF del ahorro.
@@ -24,3 +24,6 @@ Descarga `MiCartera.apk` de la última versión en **Releases** y ábrelo en el 
 Opcional: añade el secreto `SEC_CONTACT` con un email de contacto (la SEC lo pide en sus normas de uso).
 
 > Análisis automático y orientativo. **No es asesoramiento financiero.**
+
+
+La gráfica usa [Lightweight Charts](https://github.com/tradingview/lightweight-charts) de TradingView (licencia Apache-2.0, copia en `app/src/main/assets/www/lightweight-charts.LICENSE.txt`).

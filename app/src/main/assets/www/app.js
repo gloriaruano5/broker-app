@@ -58,7 +58,7 @@
 
   // ---------- Fuentes de datos ----------
   async function yahoo(sym, range, interval) {
-    return cached(`y:${sym}:${range}:${interval}`, range === 'max' ? 720 : 20, async () => {
+    return cached(`y2:${sym}:${range}:${interval}`, range === 'max' ? 720 : /m$/.test(interval) ? 5 : 20, async () => {
       let last;
       for (const host of ['query1', 'query2']) {
         const r = await http(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}&includePrePost=false&events=div`);
@@ -68,8 +68,14 @@
         const res = j.chart && j.chart.result && j.chart.result[0];
         if (!res) continue;
         const q = res.indicators.quote[0] || {};
-        const t = [], c = [];
-        (res.timestamp || []).forEach((ts, i) => { const v = q.close && q.close[i]; if (v != null && isFinite(v)) { t.push(ts); c.push(v); } });
+        const t = [], c = [], o = [], h = [], l = [], v = [];
+        (res.timestamp || []).forEach((ts, i) => {
+          const x = q.close && q.close[i]; if (x == null || !isFinite(x)) return;
+          const op = q.open && q.open[i], hi = q.high && q.high[i], lo = q.low && q.low[i], vo = q.volume && q.volume[i];
+          t.push(ts); c.push(x);
+          o.push(op != null && isFinite(op) ? op : x); h.push(hi != null && isFinite(hi) ? Math.max(hi, x) : x);
+          l.push(lo != null && isFinite(lo) ? Math.min(lo, x) : x); v.push(vo != null && isFinite(vo) ? vo : 0);
+        });
         const meta = res.meta || {};
         // Cierre anterior: el último cierre de un día anterior al de la cotización actual.
         // (chartPreviousClose es el cierre antes del inicio del rango, no el de ayer.)
@@ -80,7 +86,7 @@
           for (let i = t.length - 1; i >= 0; i--) if (day(t[i]) < cur) { prev = c[i]; break; }
         }
         const div = Object.values((res.events && res.events.dividends) || {}).map(x => ({ t: x.date, amount: x.amount })).sort((a, b) => a.t - b.t);
-        return { t, c, div, meta: { price: meta.regularMarketPrice, prev: prev, currency: meta.currency, name: meta.longName || meta.shortName, exchange: meta.fullExchangeName } };
+        return { t, c, o, h, l, v, div, meta: { price: meta.regularMarketPrice, prev: prev, currency: meta.currency, name: meta.longName || meta.shortName, exchange: meta.fullExchangeName } };
       }
       throw new Error('Yahoo no responde (' + (last ? last.status : '?') + ')');
     });
@@ -348,6 +354,46 @@
     $('#alerts').innerHTML = alerts.length
       ? alerts.map(x => `<div class="reason"><span class="dot ${x.kind}" style="display:inline-block"></span> <b>${esc(x.a.name)}</b>: ${esc(x.text)}</div>`).join('')
       : 'Sin cambios destacados en precios, tendencias ni en tus precios objetivo.';
+    const chk = await dataCheck(false).catch(() => null);
+    const bad = chk ? chk.items.filter(x => x.issues.length) : [];
+    if (bad.length && current.name === 'cartera' && $('#alerts')) { if (!alerts.length) $('#alerts').innerHTML = ''; } if (bad.length && current.name === 'cartera' && $('#alerts')) $('#alerts').insertAdjacentHTML('afterbegin', bad.map(x => `<div class="reason"><span class="dot y" style="display:inline-block"></span> <b>${esc(x.name)}</b>: revisión de datos: ${esc(x.issues.join('; '))}. Puede que su gráfica o su análisis no sean fiables ahora.</div>`).join(''));
+  }
+
+  // ---------- Comprobación automática de datos (en el móvil, que sí accede a los precios) ----------
+  let checking = null;
+  async function dataCheck(force) {
+    const last = load('dataCheck', null);
+    if (!force && last && Date.now() - last.at < 4 * 3600e3) return last;
+    if (checking) return checking;
+    checking = (async () => {
+      const items = [];
+      for (const a of assets) {
+        const it = { id: a.id, name: a.name, issues: [] };
+        try {
+          const d = await daily(a);
+          const price = d.meta.price || d.c[d.c.length - 1];
+          if (!(price > 0)) it.issues.push('sin precio');
+          const ageDays = (Date.now() / 1000 - d.t[d.t.length - 1]) / 86400;
+          if (ageDays > (isCrypto(a) ? 2 : 5)) it.issues.push(`último precio de hace ${Math.round(ageDays)} días`);
+          if (d.c.length < 100) it.issues.push(`solo ${d.c.length} días de historial`);
+          if (d.meta.prev && Math.abs(price / d.meta.prev - 1) > 0.25) it.issues.push(`variación de hoy extraña (${pctS(price / d.meta.prev - 1)})`);
+          const w = await yahoo(a.yahoo, 'max', '1wk').catch(() => null);
+          const rg = w ? A.priceRanges(w, price) : null;
+          if (!rg) it.issues.push('no se pudo calcular hasta dónde podría llegar');
+          else {
+            it.range = [rg[2].lowPct, rg[2].highPct];
+            if (rg[2].highPct > 2.5 || rg[2].lowPct < -0.9 || rg[0].highPct > 0.6) it.issues.push(`rango a 12 meses poco razonable (${pctS(rg[2].lowPct)} / ${pctS(rg[2].highPct)})`);
+          }
+          if (w && w.t.length) it.since = w.t[0];
+          it.price = price; it.ccy = d.meta.currency;
+        } catch (e) { it.issues.push('sin datos (' + e.message + ')'); }
+        items.push(it);
+      }
+      const res = { at: Date.now(), items };
+      save('dataCheck', res);
+      return res;
+    })();
+    try { return await checking; } finally { checking = null; }
   }
 
   // ---------- Vista: Detalle ----------
@@ -525,89 +571,63 @@
       <div class="disclaimer">${DISCLAIMER} La orientación suma tendencia, RSI, distancia a las medias, valoración, tono de las noticias, miedo y codicia, compras de directivos y grandes fondos. La confianza baja cuando faltan datos o las señales se contradicen.</div>`;
   }
 
+  // Gráfica interactiva tipo plataforma de trading (velas, volumen, indicadores, zoom con dos dedos).
+  const CANDLES = [['15m', '15 min', '5d', '15m', 140], ['1h', '1 hora', '1mo', '60m', 120], ['1d', '1 día', '5y', '1d', 120], ['1s', '1 semana', 'max', '1wk', 110], ['1me', '1 mes', 'max', '1mo', 400]];
+  let chartHandle = null;
   async function tabChart(a, d, body) {
-    const ranges = [['1S', 7], ['1M', 30], ['3M', 91], ['6M', 182], ['1A', 365], ['2A', 730], ['5A', 1826], ['MAX', 0]];
-    const r = current.range || 'MAX';
-    body.innerHTML = `<div class="card"><div class="pills">${ranges.map(([k]) => `<button class="pill ${k === r ? 'on' : ''}" data-r="${k}">${k}</button>`).join('')}</div>
-      <div id="chartInfo" class="small muted">&nbsp;</div><canvas id="cv"></canvas>
-      <div class="small muted" style="margin-top:6px"><span style="color:#38bdf8">━</span> precio ${r !== 'MAX' && r !== '5A' ? '· <span style="color:#f59e0b">━</span> media 50 · <span style="color:#a78bfa">━</span> media 200' : ''}${window.Portfolio.position(a).avg > 0 ? ' · <span style="color:#22c55e">┅</span> tu precio medio de compra' : ''}</div></div>
+    const prefs = Object.assign({ candle: '1d', type: 'velas', main: ['ma'], sub: 'kdj', vol: true }, load('chartPrefs', {}));
+    const setP = ch => { Object.assign(prefs, ch); save('chartPrefs', prefs); tabChart(a, d, body); };
+    const price = d.meta.price || d.c[d.c.length - 1];
+    const perf = [['Hoy', 1], ['7 días', 7], ['30 días', 30], ['90 días', 90], ['180 días', 180], ['1 año', 365]].map(([lab, days]) => {
+      let ch;
+      if (days === 1) ch = d.meta.prev ? price / d.meta.prev - 1 : null;
+      else { const base = A.changeSince(d.t, d.c, days); ch = base == null ? null : (1 + base) * price / d.c[d.c.length - 1] - 1; }
+      return `<div><span>${lab}</span><b class="${cls(ch)}">${pctS(ch)}</b></div>`;
+    }).join('');
+    const chip = (attr, k, label, on) => `<button class="chip ${on ? 'on' : ''}" data-${attr}="${k}">${label}</button>`;
+    body.innerHTML = `<div class="card pc-card">
+      <div class="pc-top">${CANDLES.map(([k, l]) => chip('cd', k, l, prefs.candle === k)).join('')}
+        <span class="pc-sep"></span>${chip('ty', prefs.type === 'velas' ? 'linea' : 'velas', prefs.type === 'velas' ? 'Velas' : 'Línea', true)}<button class="chip" id="pcFit">Ver todo</button></div>
+      <div id="pcRoot"><div class="muted" style="padding:20px">Cargando gráfica…</div></div>
+      <div class="pc-ind">${window.ProChart.MAIN.map(([k, l]) => chip('mi', k, l, prefs.main.includes(k))).join('')}<span class="pc-sep"></span>${chip('vo', 'vol', 'VOL', prefs.vol)}${window.ProChart.SUB.filter(x => x[0] !== 'vol').map(([k, l]) => chip('si', k, l, prefs.sub === k)).join('')}</div>
+      <div class="perf">${perf}</div>
+      <div class="small muted" style="margin-top:6px">Abre o cierra dos dedos para ampliar, arrastra para moverte y toca un punto para ver fecha, precio y volumen. Volumen: verde si esa vela cerró al alza y rojo si cerró a la baja (Yahoo no separa compras y ventas reales). Precios en la moneda de cotización${d.meta.currency ? ' (' + esc(d.meta.currency) + ')' : ''}.</div>
+      <details class="small" style="margin-top:6px"><summary style="color:var(--accent)">¿Qué es cada indicador?</summary><div class="muted" style="margin-top:4px">
+        <b>MA</b>: media de los últimos 7, 25 y 99 cierres. Si el precio está por encima, la tendencia es alcista.<br>
+        <b>EMA</b>: media que da más peso a lo reciente (12 y 26). Reacciona antes.<br>
+        <b>BOLL</b>: bandas de Bollinger. Cuando el precio toca la de arriba suele estar caro a corto plazo, y la de abajo, barato.<br>
+        <b>SAR</b>: puntos bajo el precio = tendencia alcista; sobre el precio = bajista. Cuando cambian de lado, posible giro.<br>
+        <b>Tendencia</b>: línea que mejor se ajusta al tramo que estás viendo, con un canal de ±2 desviaciones. Cambia al hacer zoom.<br>
+        <b>KDJ</b>: por encima de 80 sobrecompra, por debajo de 20 sobreventa. Cruces de K sobre D pueden anticipar giros.<br>
+        <b>RSI</b>: por encima de 70 caro a corto plazo, por debajo de 30 barato.<br>
+        <b>MACD</b>: barras verdes y crecientes = impulso alcista; rojas = bajista.<br>
+        Ningún indicador acierta siempre; úsalos juntos y como orientación.</div></details></div>
       <div class="card" id="histCard"></div>`;
-    body.querySelectorAll('.pill[data-r]').forEach(b => b.onclick = () => { current.range = b.dataset.r; tabChart(a, d, body); });
-    let t, c, overlays = [];
-    if (r === 'MAX' || r === '5A') {
-      const w = await yahoo(a.yahoo, 'max', '1wk');
-      t = w.t; c = w.c;
-      if (r === '5A') { const from = t[t.length - 1] - 1826 * 86400; const i0 = Math.max(0, t.findIndex(x => x >= from)); t = t.slice(i0); c = c.slice(i0); }
-    } else {
-      const days = ranges.find(x => x[0] === r)[1];
-      const s50 = A.sma(d.c, 50), s200 = A.sma(d.c, 200);
-      const from = d.t[d.t.length - 1] - days * 86400;
-      const i0 = Math.max(0, d.t.findIndex(x => x >= from));
-      t = d.t.slice(i0); c = d.c.slice(i0);
-      overlays = [{ v: s50.slice(i0), color: '#f59e0b' }, { v: s200.slice(i0), color: '#a78bfa' }];
+    body.querySelectorAll('[data-cd]').forEach(b => b.onclick = () => setP({ candle: b.dataset.cd }));
+    body.querySelectorAll('[data-ty]').forEach(b => b.onclick = () => setP({ type: b.dataset.ty }));
+    body.querySelectorAll('[data-mi]').forEach(b => b.onclick = () => { const k = b.dataset.mi; setP({ main: prefs.main.includes(k) ? prefs.main.filter(x => x !== k) : prefs.main.concat(k) }); });
+    body.querySelectorAll('[data-vo]').forEach(b => b.onclick = () => setP({ vol: !prefs.vol }));
+    body.querySelectorAll('[data-si]').forEach(b => b.onclick = () => setP({ sub: prefs.sub === b.dataset.si ? '' : b.dataset.si }));
+    const cd = CANDLES.find(x => x[0] === prefs.candle) || CANDLES[2];
+    let data;
+    try { data = await yahoo(a.yahoo, cd[2], cd[3]); }
+    catch (e) { data = cd[3] === '1d' ? d : null; }
+    if (!data || !data.c || data.c.length < 2) { $('#pcRoot').innerHTML = '<div class="muted" style="padding:20px">No hay datos para este intervalo. Prueba otro.</div>'; return; }
+    if (!data.o) data = { ...data, o: data.c, h: data.c, l: data.c, v: data.c.map(() => 0) }; // datos antiguos sin velas
+    if (chartHandle) { try { chartHandle.destroy(); } catch (e) {} chartHandle = null; }
+    const root = $('#pcRoot');
+    const pos = window.Portfolio.position(a);
+    chartHandle = window.ProChart.render(root, data, { intraday: /m$/.test(cd[3]), cost: pos.avg > 0 ? pos.avg : null, currency: data.meta && data.meta.currency, prefs, visible: cd[4] });
+    $('#pcFit').onclick = () => chartHandle && chartHandle.fit();
+    if (!data.v.some(x => x > 0)) root.insertAdjacentHTML('beforeend', '<div class="small muted" style="margin-top:4px">Este activo no publica volumen en este intervalo.</div>');
+    const w = cd[3] === '1wk' || cd[3] === '1mo' ? data : await yahoo(a.yahoo, 'max', '1wk').catch(() => null);
+    if (w && w.c.length) {
+      const first = w.c[0], last = price;
+      $('#histCard').innerHTML = `<h2>Historial completo</h2><div class="kv">
+        <div><span>Desde</span><b>${dateS(w.t[0])}</b></div><div><span>Variación</span><b class="${cls(last / first - 1)}">${pctS(last / first - 1)}</b></div>
+        <div><span>Máximo</span><b>${num(Math.max(...(w.h || w.c)))}</b></div><div><span>Mínimo</span><b>${num(Math.min(...(w.l || w.c)))}</b></div></div>
+        <div class="small muted" style="margin-top:6px">Elige «1 semana» o «1 mes» y pulsa «Ver todo» para ver todo el historial desde que hay datos en Yahoo Finance.</div>`;
     }
-    drawChart($('#cv'), t, c, overlays, window.Portfolio.position(a).avg || null);
-    if (t.length) {
-      const first = c[0], last = c[c.length - 1];
-      $('#histCard').innerHTML = `<h2>Historial ${r === 'MAX' ? 'completo' : r}</h2><div class="kv">
-        <div><span>Desde</span><b>${dateS(t[0])}</b></div><div><span>Variación</span><b class="${cls(last / first - 1)}">${pctS(last / first - 1)}</b></div>
-        <div><span>Máximo</span><b>${num(Math.max(...c))}</b></div><div><span>Mínimo</span><b>${num(Math.min(...c))}</b></div></div>
-        ${r === 'MAX' ? '<div class="small muted" style="margin-top:6px">Datos semanales desde que hay registros en Yahoo Finance.</div>' : ''}`;
-    }
-  }
-
-  function drawChart(cv, t, c, overlays, costLine) {
-    const dpr = window.devicePixelRatio || 1;
-    const W = cv.clientWidth, H = cv.clientHeight;
-    cv.width = W * dpr; cv.height = H * dpr;
-    const g = cv.getContext('2d'); g.scale(dpr, dpr);
-    if (c.length < 2) { g.fillStyle = '#8b9ab3'; g.fillText('Sin datos suficientes', 10, 20); return; }
-    let lo = Math.min(...c), hi = Math.max(...c);
-    overlays.forEach(o => o.v.forEach(x => { if (x != null) { lo = Math.min(lo, x); hi = Math.max(hi, x); } }));
-    if (costLine) { lo = Math.min(lo, costLine); hi = Math.max(hi, costLine); }
-    const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
-    const L = 4, R = 52, T = 6, B = 18;
-    const X = i => L + (i / (c.length - 1)) * (W - L - R);
-    const Y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-    const paint = (cross) => {
-      g.clearRect(0, 0, W, H);
-      g.font = '11px system-ui'; g.fillStyle = '#8b9ab3'; g.strokeStyle = '#26344f'; g.lineWidth = 1;
-      for (let k = 0; k <= 4; k++) {
-        const v = lo + (hi - lo) * k / 4, y = Y(v);
-        g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke();
-        g.fillText(num(v), W - R + 4, y + 4);
-      }
-      [0, Math.floor(c.length / 2), c.length - 1].forEach((i, k) => {
-        const s = new Date(t[i] * 1000).toLocaleDateString('es-ES', { month: 'short', year: '2-digit' });
-        g.fillText(s, Math.min(Math.max(X(i) - (k === 2 ? 40 : k === 1 ? 18 : 0), 0), W - R - 40), H - 4);
-      });
-      if (costLine) { g.setLineDash([5, 4]); g.strokeStyle = '#22c55e'; g.beginPath(); g.moveTo(L, Y(costLine)); g.lineTo(W - R, Y(costLine)); g.stroke(); g.setLineDash([]); }
-      overlays.forEach(o => {
-        g.strokeStyle = o.color; g.lineWidth = 1.2; g.beginPath(); let started = false;
-        o.v.forEach((v, i) => { if (v == null) return; if (!started) { g.moveTo(X(i), Y(v)); started = true; } else g.lineTo(X(i), Y(v)); });
-        g.stroke();
-      });
-      const grad = g.createLinearGradient(0, T, 0, H - B);
-      grad.addColorStop(0, 'rgba(56,189,248,0.25)'); grad.addColorStop(1, 'rgba(56,189,248,0)');
-      g.beginPath(); c.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)));
-      g.strokeStyle = '#38bdf8'; g.lineWidth = 2; g.stroke();
-      g.lineTo(X(c.length - 1), H - B); g.lineTo(X(0), H - B); g.closePath(); g.fillStyle = grad; g.fill();
-      if (cross != null) {
-        g.strokeStyle = '#e5ebf5'; g.lineWidth = 1; g.beginPath(); g.moveTo(X(cross), T); g.lineTo(X(cross), H - B); g.stroke();
-        g.fillStyle = '#e5ebf5'; g.beginPath(); g.arc(X(cross), Y(c[cross]), 4, 0, 7); g.fill();
-      }
-    };
-    paint(null);
-    const info = $('#chartInfo');
-    const pick = ev => {
-      const rect = cv.getBoundingClientRect();
-      const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
-      const i = Math.round(Math.min(Math.max((x - L) / (W - L - R), 0), 1) * (c.length - 1));
-      paint(i);
-      info.innerHTML = `${dateS(t[i])}: <b>${num(c[i])}</b> <span class="${cls(c[c.length - 1] / c[i] - 1)}">(${pctS(c[c.length - 1] / c[i] - 1)} hasta hoy)</span>`;
-    };
-    cv.ontouchstart = cv.ontouchmove = pick; cv.onmousemove = pick;
-    cv.onmouseleave = () => { paint(null); info.innerHTML = '&nbsp;'; };
   }
 
   function newsList(items, limit) {
@@ -979,12 +999,22 @@
         <label>Repositorio de GitHub (usuario/nombre)</label><input id="repo" value="${esc(settings.dataRepo)}">
         <button class="btn sec" id="repoBtn">Guardar</button>
         <div class="small muted" style="margin-top:8px">De ahí se leen cada día los datos de la SEC (cuentas, directivos, fondos 13F) y el comentario diario.</div></div>
+      <div class="card"><h2>Comprobación de datos</h2><div id="chkBox" class="small muted">Cargando…</div>
+        <div class="btns"><button class="btn sec" id="chkBtn">Comprobar ahora</button></div></div>
       <div class="card"><h2>Fuentes</h2><div class="small muted">Precios: Yahoo Finance. Noticias: Google Noticias. Miedo y codicia: CNN y alternative.me. Cuentas, directivos y 13F: SEC EDGAR.</div></div>
       <div class="disclaimer">${DISCLAIMER}</div>
       <div class="btns"><button class="btn danger" id="resetBtn">Restaurar lista inicial</button></div>`;
     view.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => go('editar', b.dataset.ed));
     view.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [assets[i - 1], assets[i]] = [assets[i], assets[i - 1]]; persist(); renderSettings(); } });
     $('#addBtn').onclick = () => go('editar', null);
+    const showChk = r => { const el = $('#chkBox'); if (!el) return;
+      if (!r) { el.textContent = 'Todavía no se ha hecho ninguna comprobación.'; return; }
+      const bad = r.items.filter(x => x.issues.length);
+      el.innerHTML = `Se comprueba sola cada 4 horas al abrir la app: precio, que esté al día, historial y rango de 12 meses de cada activo. Última: ${new Date(r.at).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}.<br>` +
+        (bad.length ? `<span class="warn">${bad.length} con problemas:</span><br>` + bad.map(x => `<b>${esc(x.name)}</b>: ${esc(x.issues.join('; '))}`).join('<br>') : `<span class="up">Los ${r.items.length} activos están bien.</span>`) +
+        `<details style="margin-top:6px"><summary style="color:var(--accent)">Ver detalle</summary>${r.items.map(x => `${esc(x.name)}: ${x.price ? num(x.price) + ' ' + esc(x.ccy || '') : '–'} · desde ${x.since ? dateS(x.since) : '–'} · 12 meses ${x.range ? pctS(x.range[0]) + ' / ' + pctS(x.range[1]) : '–'}`).join('<br>')}</details>`; };
+    showChk(load('dataCheck', null));
+    $('#chkBtn').onclick = async () => { $('#chkBox').textContent = 'Comprobando los ' + assets.length + ' activos…'; showChk(await dataCheck(true).catch(() => null)); };
     $('#expBtn').onclick = () => { $('#backup').value = JSON.stringify({ assets, settings }); $('#backup').select(); };
     $('#impBtn').onclick = () => { try { const j = JSON.parse($('#backup').value);
       if (j.pos && !j.assets) { // posiciones exactas del bróker: {"pos":{"id":[acciones, precio medio en €]}}

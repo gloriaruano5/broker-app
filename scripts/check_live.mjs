@@ -15,7 +15,8 @@ const get = async (url, h = {}) => { try { const r = await fetch(url, { headers:
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function yahooChart(sym, range, interval) {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  if (blocked) return { err: 'bloqueado' };
+  for (let attempt = 0; attempt < 1; attempt++) {
     for (const host of ['query2', 'query1']) {
       const r = await get(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}`);
       if (r.status === 200) {
@@ -27,7 +28,6 @@ async function yahooChart(sym, range, interval) {
       }
       if (r.status !== 429) return { err: r.status };
     }
-    await sleep(3000 * (attempt + 1));
   }
   return { err: 429 };
 }
@@ -50,11 +50,13 @@ async function stooq(sym, interval) {
   if (!c.length) return { err: 'Stooq vacío' };
   return { t, c, meta: { currency: '?', regularMarketPrice: c[c.length - 1] }, src: 'Stooq' };
 }
+let blocked = false; // Yahoo y Stooq bloquean a los servidores de GitHub: si pasa, no se insiste (la app del móvil hace esta comprobación)
 async function chart(sym, range, interval) {
   const y = await yahooChart(sym, range, interval);
   if (!y.err) return y;
+  if (blocked) return { err: 'bloqueado' };
   const s = await stooq(sym, interval);
-  if (s.err) return { err: `Yahoo ${y.err}, ${s.err}` };
+  if (s.err) { blocked = true; return { err: `Yahoo ${y.err}, ${s.err}` }; }
   if (range === '2y') { const from = Date.now() / 1000 - 730 * 86400; const i0 = s.t.findIndex(x => x >= from); s.t = s.t.slice(i0); s.c = s.c.slice(i0); }
   return s;
 }
@@ -95,7 +97,7 @@ for (const a of DEFAULT_ASSETS) {
   const s = a.sec ? sec.assets[a.sec] : null;
   const funds = a.sec ? sec.funds.positions[a.sec] || [] : [];
   const line = [`■ ${a.name} (${a.yahoo})`];
-  if (d.err) { line.push(`  PRECIO: ERROR ${d.err}`); out.push(...line); problems.push(`${a.name}: sin precio (${d.err})`); continue; }
+  if (d.err) { line.push(`  Precio: no accesible desde GitHub (${d.err}) · noticias 14 d: ${n.length}${a.sec ? ` · SEC: ${s ? s.filings.length + ' publicaciones' : 'SIN DATOS'}` : ''}`); out.push(...line); if (!n.length) problems.push(`${a.name}: sin noticias`); if (a.sec && !s) problems.push(`${a.name}: sin datos SEC`); continue; }
   const last = d.c[d.c.length - 1];
   const prevIdx = d.c.length - 2;
   line.push(`  Precio ${last.toFixed(2)} ${d.meta.currency} · cierre anterior ${d.c[prevIdx]?.toFixed(2)} · ${d.c.length} días · historial desde ${w.t ? new Date(w.t[0] * 1000).toISOString().slice(0, 10) : '?'}`);
@@ -119,7 +121,8 @@ for (const a of DEFAULT_ASSETS) {
   out.push(...line);
 }
 out.push('');
-out.push(problems.length ? 'PROBLEMAS:\n- ' + problems.join('\n- ') : 'Todo correcto: los 23 activos tienen precio, historial y rangos razonables.');
+if (blocked) out.push('Nota: los proveedores de precios bloquean a GitHub. Precios, historial y rangos los comprueba la app en el móvil cada 4 horas (Ajustes > Comprobación de datos).');
+out.push(problems.length ? 'PROBLEMAS:\n- ' + problems.join('\n- ') : 'Todo correcto en lo que se puede comprobar desde aquí.');
 const text = out.join('\n');
 console.log(text);
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '```\n' + text + '\n```\n');

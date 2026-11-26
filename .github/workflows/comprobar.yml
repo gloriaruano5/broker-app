@@ -3,7 +3,7 @@ name: Comprobar datos reales
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 7,11,15,19 * * *'   # 4 veces al día (8, 12, 16 y 20 h en España en invierno)
+    - cron: '0 7 * * *'   # cada día a las 8 h (España, invierno): noticias, SEC y sentimiento. Los precios los comprueba la app.
 
 jobs:
   check:
