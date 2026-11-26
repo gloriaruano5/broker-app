@@ -449,6 +449,9 @@
     const v = extra.valuation;
     const w = await yahoo(a.yahoo, 'max', '1wk').catch(() => null);
     const odds = w ? A.historicalOdds(w) : null;
+    const fxR = await fxToEur(d.meta.currency).catch(() => null) || 1;
+    const curR = fxR !== 1 || d.meta.currency === 'EUR' ? '€' : (d.meta.currency || '');
+    const ranges = w ? A.priceRanges(w, d.meta.price || d.c[d.c.length - 1]) : null;
     const sc = ev.scenario;
     const ccy = d.meta.currency || '';
     const today = new Date().toISOString().slice(0, 10);
@@ -483,6 +486,16 @@
           <div><span>Precio actual</span><b>${num(m.last)}</b></div></div>
         ${watch.length ? `<h3>Qué vigilar</h3>${watch.map(x => `<div class="reason small">👁 ${esc(x)}</div>`).join('')}` : ''}
         <div class="small muted" style="margin-top:8px">Ningún análisis acierta siempre: esto son probabilidades a partir de los datos de hoy, y cambian cuando cambian los datos. Úsalo para no decidir por impulso, no como garantía.</div></div>
+      ${ranges ? `<div class="card"><h2>Hasta dónde podría llegar</h2>
+        <div class="small muted" style="margin-bottom:8px">Según cómo se ha movido ${esc(a.name)} en los últimos ${ranges[0].years} años: 8 de cada 10 veces terminó dentro de este rango. 1 de cada 10 acabó por debajo y otra por encima.</div>
+        ${ranges.map(r => { const lo = r.low * fxR, hi = r.high * fxR, mid = r.mid * fxR, now = m.last * fxR;
+          const span = hi - lo || 1, pNow = Math.max(0, Math.min(100, (now - lo) / span * 100));
+          return `<div style="margin:12px 0"><div class="row small"><b class="grow">En ${r.label}</b><span class="muted">lo típico ${num(mid, 2)} ${curR} (${pctS(r.midPct)})</span></div>
+            <div style="position:relative;height:10px;border-radius:6px;margin:8px 0 4px;background:linear-gradient(90deg,var(--down),var(--card2) ${pNow.toFixed(0)}%,var(--up))">
+              <div style="position:absolute;top:-4px;left:calc(${pNow.toFixed(1)}% - 2px);width:4px;height:18px;background:#fff;border-radius:2px"></div></div>
+            <div class="row small" style="justify-content:space-between"><span class="down">▼ ${num(lo, 2)} ${curR} (${pctS(r.lowPct)})</span><span class="up">${num(hi, 2)} ${curR} (${pctS(r.highPct)}) ▲</span></div></div>`; }).join('')}
+        ${extra.summary && extra.summary.targetPrice ? `<div class="small" style="margin-top:6px">Precio objetivo medio de los analistas a 12 meses: <b>${num(extra.summary.targetPrice * fxR, 2)} ${curR}</b> (${pctS(extra.summary.targetPrice / m.last - 1)}).</div>` : ''}
+        <div class="small muted" style="margin-top:8px">Es la estadística de su propio pasado, no una predicción: un suceso nuevo (resultados, aranceles, una crisis) puede sacarlo del rango. La marca blanca es el precio de hoy.</div></div>` : ''}
       ${ev.alerts.length ? `<div class="card"><h2>Qué ha cambiado</h2>${ev.alerts.map(x => `<div class="reason ${x.kind === 'g' ? 'up' : x.kind === 'r' ? 'down' : 'warn'}">${esc(x.text)}</div>`).join('')}</div>` : ''}
       ${imp.length ? `<div class="card"><h2>Lo importante esta semana</h2>${newsList(imp, 3)}</div>` : ''}
       ${note ? `<div class="card"><h2>Comentario del día <span class="badge">${esc(notes.date || '')}</span></h2><div style="white-space:pre-wrap">${esc(note)}</div></div>` : ''}

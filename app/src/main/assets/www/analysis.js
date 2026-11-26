@@ -324,7 +324,28 @@
       text: `En su historial hubo ${n} momentos con ${state}. Tres meses después subía en el ${(upPct * 100).toFixed(0)}% de los casos. Lo típico fue un ${signed(q(0.5))}; en el 25% peor de los casos, ${signed(q(0.25))} o menos, y en el 25% mejor, ${signed(q(0.75))} o más.` };
   }
 
-  const api = { historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
+  /**
+   * Rango probable de precio a 1, 3 y 12 meses: cómo se movió de verdad este activo en periodos así
+   * durante los últimos 10 años (percentiles 10, 50 y 90), aplicado al precio de hoy.
+   */
+  function priceRanges(w, price) {
+    const c = w && w.c;
+    if (!c || c.length < 60) return null;
+    const start = Math.max(0, c.length - 520);
+    const out = [];
+    for (const [weeks, label] of [[4, '1 mes'], [13, '3 meses'], [52, '12 meses']]) {
+      const r = [];
+      for (let i = start; i + weeks < c.length; i++) r.push(c[i + weeks] / c[i] - 1);
+      if (r.length < 20) continue;
+      r.sort((a, b) => a - b);
+      const q = p => r[Math.min(r.length - 1, Math.floor(p * r.length))];
+      out.push({ weeks, label, n: r.length, low: price * (1 + q(0.1)), mid: price * (1 + q(0.5)), high: price * (1 + q(0.9)),
+        lowPct: q(0.1), midPct: q(0.5), highPct: q(0.9), years: Math.round((c.length - start) / 52) });
+    }
+    return out.length ? out : null;
+  }
+
+  const api = { priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
   root.Analysis = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
