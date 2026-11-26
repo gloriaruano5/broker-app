@@ -87,6 +87,9 @@
    * data = {t,o,h,l,c,v} (segundos UTC), opts = {intraday, cost, currency, prefs, onPrefs, visible}
    */
   function render(root, data, opts) {
+    // Colores del tema elegido en Ajustes.
+    try { const cs = getComputedStyle(document.documentElement), v = k => cs.getPropertyValue(k).trim();
+      if (v('--card')) { COL.bg = v('--card'); COL.grid = v('--line'); COL.text = v('--muted'); COL.trend = v('--text'); } } catch (e) {}
     if (!LWC) { root.innerHTML = '<div class="muted">No se pudo cargar la gráfica.</div>'; return () => {}; }
     const prefs = opts.prefs;
     const off = -new Date().getTimezoneOffset() * 60; // se muestra en hora local
@@ -129,7 +132,7 @@
       price = main.addCandlestickSeries({ upColor: COL.up, downColor: COL.down, borderUpColor: COL.up, borderDownColor: COL.down, wickUpColor: COL.up, wickDownColor: COL.down });
       price.setData(t.map((x, i) => ({ time: x, open: o[i], high: h[i], low: l[i], close: c[i] })));
     }
-    price.applyOptions({ priceLineStyle: LWC.LineStyle.Dashed, priceLineColor: '#e5ebf5' });
+    price.applyOptions({ priceLineStyle: LWC.LineStyle.Dashed, priceLineColor: COL.trend });
     if (opts.cost) price.createPriceLine({ price: opts.cost, color: COL.cost, lineWidth: 1, lineStyle: LWC.LineStyle.Dotted, axisLabelVisible: true, title: 'tu compra' });
 
     main.priceScale('right').applyOptions({ scaleMargins: { top: 0.22, bottom: 0.05 } });

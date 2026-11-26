@@ -23,6 +23,9 @@
     save('assets', assets);
   }
   let settings = Object.assign({ dataRepo: 'gloriaruano5/broker-app', branch: 'main' }, load('settings', {}));
+  const THEMES_BG = [['', 'Azul noche', '#0b1220'], ['negro', 'Negro', '#000000'], ['turquesa', 'Turquesa', '#0b3a42'], ['morado', 'Morado', '#251847'], ['verde', 'Verde', '#112c21'], ['claro', 'Claro', '#eef2f7']];
+  function applyTheme() { if (settings.theme) document.documentElement.dataset.theme = settings.theme; else delete document.documentElement.dataset.theme; }
+  applyTheme();
   const persist = () => { save('assets', assets); syncNotif(); };
 
   // ---------- Red ----------
@@ -1417,6 +1420,8 @@
   function renderSettings() {
     $('#title').textContent = 'Ajustes';
     view.innerHTML = `
+      <div class="card"><h2>Apariencia</h2><div class="small muted" style="margin-bottom:8px">Color de fondo de la app.</div>
+        <div class="themes">${THEMES_BG.map(([k, l, c]) => `<button data-theme-k="${k}" class="${(settings.theme || '') === k ? 'on' : ''}"><i style="background:${c}"></i>${l}</button>`).join('')}</div></div>
       <div class="card"><h2>Mis activos</h2>
         ${assets.map((a, i) => `<div class="asset"><div class="grow"><div class="name">${esc(a.name)}</div><div class="small muted">${esc(a.yahoo)}${a.sec ? ' · SEC ' + esc(a.sec) : ''}</div></div>
           <button class="icon" data-up="${i}">↑</button><button class="icon" data-ed="${esc(a.id)}">✎</button></div>`).join('')}
@@ -1437,6 +1442,7 @@
       <div class="small muted" style="text-align:center;margin:14px 0">Mi Cartera · versión ${esc((() => { try { return window.NativeNotif.version(); } catch (e) { return 'web'; } })() || '–')}</div>`;
     view.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => go('editar', b.dataset.ed));
     bindNotif();
+    view.querySelectorAll('[data-theme-k]').forEach(b => b.onclick = () => { settings.theme = b.dataset.themeK; save('settings', settings); applyTheme(); renderSettings(); });
     view.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [assets[i - 1], assets[i]] = [assets[i], assets[i - 1]]; persist(); renderSettings(); } });
     $('#addBtn').onclick = () => go('editar', null);
     const showChk = r => { const el = $('#chkBox'); if (!el) return;
@@ -1513,7 +1519,7 @@
   function toast(msg) {
     const t = document.createElement('div');
     t.textContent = msg;
-    t.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:#1b2740;border:1px solid #26344f;padding:10px 16px;border-radius:10px;z-index:20';
+    t.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:var(--card2);color:var(--text);border:1px solid var(--line);padding:10px 16px;border-radius:10px;z-index:20';
     document.body.appendChild(t); setTimeout(() => t.remove(), 1800);
   }
 
