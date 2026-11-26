@@ -324,6 +324,7 @@
   }
 
   // ---------- Vista: Cartera ----------
+  function byValue(list) { const v = load('lastValues', {}); return list.map((a, i) => [a, i]).sort((x, y) => (v[y[0].id] || 0) - (v[x[0].id] || 0) || x[1] - y[1]).map(x => x[0]); }
   async function renderPortfolio() {
     $('#title').textContent = 'Mi Cartera';
     view.innerHTML = `
@@ -336,7 +337,7 @@
     $('#taxBtn').onclick = () => go('renta');
     $('#jBtn').onclick = () => go('diario');
     const list = $('#list');
-    list.innerHTML = `<div class="phead"><span>Activo</span><span>Valor</span><span>Desde la compra</span></div>` + assets.map(a => `
+    list.innerHTML = `<div class="phead"><span>Activo</span><span>Valor</span><span>Desde la compra</span></div>` + byValue(assets).map(a => `
       <div class="asset prow" data-id="${esc(a.id)}">
         <div class="pname"><div class="name"><span class="dot" id="dot-${esc(a.id)}"></span><span class="nm">${esc(a.name)}</span></div><div class="sub" id="sub-${esc(a.id)}">${esc(a.type)} · ${esc(a.yahoo)}</div></div>
         <div class="val" id="px-${esc(a.id)}">…</div>
@@ -345,6 +346,7 @@
     list.querySelectorAll('.asset').forEach(el => el.onclick = () => go('detalle', el.dataset.id));
 
     let total = 0, invested = 0, plSum = 0, fxSum = 0, missing = 0;
+    const vals = {};
     const alerts = [];
     const fg = { stocks: await fearGreedStocks().catch(() => null), crypto: await fearGreedCrypto().catch(() => null) };
     await Promise.all(assets.map(async a => {
@@ -364,6 +366,7 @@
           $('#px-' + a.id).textContent = num(sn.price * sn.fx, 2) + ' €';
           chEl.innerHTML = `<b>${esc(pctS(ch))}</b><span>hoy</span>`; chEl.className = 'chg ' + cls(ch);
         }
+        vals[a.id] = sn.pos.qty > 0 ? sn.value : 0;
         if (sn.pos.qty > 0) {
           total += sn.value;
           if (sn.plEur != null) { plSum += sn.plEur; invested += sn.value - sn.plEur; }
@@ -376,6 +379,9 @@
       }
     }));
     if (current.name !== 'cartera') return;
+    // Ordenar por valor actual (lo que sacarías vendiendo hoy), de mayor a menor; se recuerda para la próxima vez.
+    save('lastValues', Object.assign(load('lastValues', {}), vals));
+    byValue(assets).forEach(a => { const el = list.querySelector(`[data-id="${CSS.escape(a.id)}"]`); if (el) list.appendChild(el); });
     $('#total').textContent = total > 0 ? eur(total) : 'Añade tus cantidades';
     if (invested > 0) {
       $('#totalPl').innerHTML = `<span class="${cls(plSum)}">${plSum >= 0 ? '+' : ''}${eur(plSum)} (${pctS(plSum / invested)})</span> <span class="muted">sobre lo invertido</span>` +
