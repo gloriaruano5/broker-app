@@ -10,6 +10,16 @@
   function load(k, def) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch (e) { return def; } }
   function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* lleno: se ignora */ } }
   let assets = load('assets', null) || window.DEFAULT_ASSETS.map(a => Object.assign({ qty: 0, cost: 0 }, a));
+  // Si la lista inicial se corrige (símbolos, ISIN), se actualiza en el móvil sin tocar cantidades ni operaciones.
+  const DEFAULTS_VERSION = 2;
+  if (load('defaultsVersion', 1) < DEFAULTS_VERSION) {
+    assets.forEach(a => {
+      const def = window.DEFAULT_ASSETS.find(d => d.id === a.id);
+      if (def) ['yahoo', 'note', 'isin', 'name'].forEach(k => { if (def[k] !== undefined) a[k] = def[k]; else if (k !== 'name') delete a[k]; });
+    });
+    save('defaultsVersion', DEFAULTS_VERSION);
+    save('assets', assets);
+  }
   let settings = Object.assign({ dataRepo: 'gloriaruano5/broker-app', branch: 'main' }, load('settings', {}));
   const persist = () => save('assets', assets);
 

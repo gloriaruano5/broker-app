@@ -7,7 +7,7 @@
     "MP": {"pattern": "^MP MATERIALS", "cusips": ["553368101"]},
     "RDDT": {"pattern": "^REDDIT", "cusips": ["75734B100"]},
     "Q": {"pattern": "^QNITY"},
-    "DXYZ": {"pattern": "^DESTINY TECH"},
+    "DXYZ": {"pattern": "^DESTINY TECH", "cusips": ["25063F107"]},
     "TSM": {"pattern": "^TAIWAN SEMICONDUCTOR", "cusips": ["874039100"]},
     "POET": {"pattern": "^POET TECH"},
     "PDD": {"pattern": "^PDD HOLDINGS|^PINDUODUO", "cusips": ["722304102"]},
