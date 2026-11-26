@@ -64,6 +64,19 @@ async function history(a) {
 }
 // Estudio de factores: qué parte de la señal ayuda de verdad (rentabilidad a 3 meses frente a la media del activo).
 const FACT = {};
+// Validación por periodos: ventaja de cada señal frente a la media del mismo activo EN ESE MISMO periodo.
+const PER = {};
+function periodStats(h, pts) {
+  const split = Date.parse('2022-01-01') / 1000;
+  for (const per of ['a', 'b']) {
+    const P = pts.filter(p => p.f63 != null && (per === 'a' ? h.t[p.i] < split : h.t[p.i] >= split));
+    if (P.length < 20) continue;
+    const base = P.reduce((x, p) => x + p.f63, 0) / P.length;
+    for (const p of P) { const k = p.b + per; const o = PER[k] || (PER[k] = [0, 0]); o[0] += p.f63 - base; o[1]++; }
+    const fav = P.filter(p => p.score >= 0.75), unf = P.filter(p => p.score <= -0.75);
+    for (const [nm, L] of [['fav', fav], ['unf', unf]]) { const o = PER[nm + per] || (PER[nm + per] = [0, 0]); L.forEach(p => { o[0] += p.f63 - base; o[1]++; }); }
+  }
+}
 function factorStudy(h) {
   const c = h.c, t = h.t, n = c.length, s50 = A.sma(c, 50), s200 = A.sma(c, 200), r = A.rsi(c, 14);
   const pts = [];
@@ -103,7 +116,8 @@ for (const a of DEFAULT_ASSETS) {
   const h = await history(a);
   if (h.err || h.c.length < 400) { lines.push(`■ ${a.name}: sin historial suficiente (${h.err || h.c.length + ' días'})`); continue; }
   h.id = a.id; factorStudy(h);
-  const bt = A.backtest(h);
+  const bt = A.backtest(h, { keepPoints: true });
+  periodStats(h, bt.pts); delete bt.pts;
   if (!bt) { lines.push(`■ ${a.name}: historial corto`); continue; }
   result.assets[a.id] = { src: h.src, days: h.c.length, ...bt };
   const s = bt.strategy, bb = bt.byBucket;
@@ -122,6 +136,13 @@ for (const [k, nm] of A.BUCKETS) {
 }
 for (const w of [4, 13, 52]) if (cover[w].length) lines.push(`  Rango ${w} semanas: el precio acabó dentro el ${(cover[w].reduce((x, y) => x + y, 0) / cover[w].length * 100).toFixed(0)}% de las veces (objetivo 80%)`);
 result.summary = { pool: Object.fromEntries(Object.entries(pool).map(([k, L]) => { const N = L.reduce((x, y) => x + y.n, 0); return [k, N ? { n: N, edge: L.reduce((x, y) => x + y.avg * y.n, 0) / N } : null]; })), coverage: Object.fromEntries(Object.entries(cover).map(([w, L]) => [w, L.length ? L.reduce((x, y) => x + y, 0) / L.length : null])) };
+lines.push('');
+lines.push('VALIDACIÓN (ventaja a 3 meses frente a la media del activo en el mismo periodo; antes de 2022 | desde 2022):');
+for (const [k, nm] of [...A.BUCKETS.map(b => [b[0], b[1]]), ['fav', 'Comprar+Acumular'], ['unf', 'Precaución+Reducir']]) {
+  const a = PER[k + 'a'], b = PER[k + 'b'];
+  lines.push(`  ${nm.padEnd(20)} ${a ? pc(a[0] / a[1]) + ' (n=' + a[1] + ')' : '–'} | ${b ? pc(b[0] / b[1]) + ' (n=' + b[1] + ')' : '–'}`);
+}
+result.validation = Object.fromEntries(Object.entries(PER).map(([k, v]) => [k, { edge: v[0] / v[1], n: v[1] }]));
 lines.push('');
 lines.push('FACTORES (ventaja a 3 meses frente a la media del activo; antes de 2022 | desde 2022; n = semanas):');
 for (const [k, o] of Object.entries(FACT).sort()) lines.push(`  ${k.padEnd(20)} ${o.a[1] ? pc(o.a[0] / o.a[1]) : '–'} (n=${o.a[1]}) | ${o.b[1] ? pc(o.b[0] / o.b[1]) : '–'} (n=${o.b[1]}) · ${o.assets.size} activos`);
