@@ -1184,6 +1184,12 @@
   // La prueba histórica dice que la señal sola apenas acierta la dirección, pero que comprar lo que se ha quedado
   // por debajo del reparto propuesto (rebalancear con dinero nuevo) sí mejoró el resultado y redujo caídas.
   // Por eso la lista combina: hueco en el reparto (lo que más pesa), la señal de la app y si la señal ha funcionado antes en ese activo.
+  function oppOut(r, i, del) {
+    return `<div class="opp"><div class="row"><span class="badge">${del ? '★' : i + 1}</span><b class="grow" style="font-size:16px">${esc(r.w.name)}</b><span class="dot ${r.kind}"></span>${del ? `<button class="icon" data-wdel="${esc(del)}">✕</button>` : ''}</div>
+      <div class="small muted">${esc(r.w.tag)} · ${esc(r.w.yahoo)}${r.y1 != null ? ` · último año <span class="${cls(r.y1)}">${pctS(r.y1)}</span>` : ''}</div>
+      <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Precio de entrada orientativo</span><b class="up">${num(r.limit, 2)} €</b></div></div>
+      <div class="small muted" style="margin-top:4px">La app dice «${esc(r.label)}»${r.night ? ' (revisión de anoche, precio en dólares pasado a euros)' : ''}.</div></div>`;
+  }
   async function renderOpps() {
     $('#title').textContent = 'Oportunidades de compra';
     view.innerHTML = `<div class="card"><div class="small muted">Analizando tus ${assets.length} activos y ${(window.WATCHLIST || []).length} más del mercado: reparto, señal, tendencia y precios… (tarda un poco la primera vez)</div></div>`;
@@ -1214,7 +1220,7 @@
     }));
     // Fuera de tu cartera: solo la señal (no hay reparto que completar), así que se exige que sea claramente favorable.
     const mine = new Set(assets.map(a => a.yahoo));
-    const outside = (await Promise.all((window.WATCHLIST || []).filter(w => !mine.has(w.yahoo)).map(async w => {
+    const evalW = async w => {
       try {
         const d = await yahoo(w.yahoo, '2y', '1d'); if (d.c.length < 200) return null;
         const fx = await fxToEur(d.meta.currency); const key = isCrypto(w) ? 'c' : 's';
@@ -1223,9 +1229,20 @@
         const c = d.c.slice(-61), lr = []; for (let i = 1; i < c.length; i++) if (c[i] > 0 && c[i - 1] > 0) lr.push(Math.log(c[i] / c[i - 1]));
         const mu = lr.reduce((x, y) => x + y, 0) / (lr.length || 1), sdD = Math.sqrt(lr.reduce((x, y) => x + (y - mu) ** 2, 0) / Math.max(1, lr.length - 1));
         const pxEur = (d.meta.price || d.c[d.c.length - 1]) * fx;
-        return { w, ev, b: A.bucketOf(ev.score), pxEur, limit: pxEur * Math.exp(-0.7 * sdD * Math.sqrt(5)), y1: A.changeSince(d.t, d.c, 365) };
+        return { w: { name: w.name, yahoo: w.yahoo, tag: w.tag || w.type || '' }, score: ev.score, label: ev.label, kind: ev.kind, b: A.bucketOf(ev.score), pxEur, limit: pxEur * Math.exp(-0.7 * sdD * Math.sqrt(5)), y1: A.changeSince(d.t, d.c, 365) };
       } catch (e) { return null; }
-    }))).filter(r => r && (r.b === 'buy' || r.b === 'acc')).sort((x, y) => y.ev.score - x.ev.score).slice(0, 5);
+    };
+    // Los ~100 de la lista se revisan como mucho cada 6 horas (se guarda el resultado), para no saturar a Yahoo.
+    const [phoneRes, scan, usd] = await Promise.all([
+      cached('opp-watch:' + (window.WATCHLIST || []).length, 360, async () => (await Promise.all((window.WATCHLIST || []).map(evalW))).filter(Boolean)).catch(() => []),
+      cached('scan:' + settings.dataRepo, 360, async () => { const r = await http(`https://raw.githubusercontent.com/${settings.dataRepo}/${settings.branch}/data/scan.json`); return r.status === 200 ? JSON.parse(r.text) : null; }).catch(() => null),
+      fxToEur('USD').catch(() => null)
+    ]);
+    const seen = new Set([...mine, ...(window.WATCHLIST || []).map(w => w.yahoo)]);
+    const fromScan = scan && usd ? scan.top.filter(x => !seen.has(x.sym)).map(x => ({ w: { name: x.name, yahoo: x.sym, tag: [x.sector, x.idx].filter(Boolean).join(' · ') }, score: x.score, label: x.label, kind: x.kind, b: x.b, pxEur: x.px * usd, limit: x.limit * usd, y1: x.y1, night: true })) : [];
+    const outside = [...phoneRes.filter(r => !mine.has(r.w.yahoo)), ...fromScan].filter(r => r.b === 'buy' || r.b === 'acc').sort((x, y) => y.score - x.score).slice(0, 8);
+    const watchN = (window.WATCHLIST || []).length + (scan ? scan.scanned : 0);
+    const own = (settings.watch || []).length ? (await Promise.all(settings.watch.map(evalW))) : [];
     if (current.name !== 'oportunidades') return;
     const good = rows.filter(r => r.b !== 'caut' && r.b !== 'sell' && (r.diff > 0.005 || r.b === 'buy' || r.b === 'acc')).sort((x, y) => y.rank - x.rank).slice(0, 5);
     const wait = rows.filter(r => r.b === 'caut' || r.b === 'sell' || (r.g && r.g.out && r.diff < 0)).sort((x, y) => x.ev.score - y.ev.score).slice(0, 6);
@@ -1249,14 +1266,29 @@
         <div class="small muted" style="margin-bottom:6px">Ordenadas combinando tres cosas: lo que le falta a cada activo para llegar al reparto propuesto (lo que más ha funcionado en la prueba histórica), la señal de la app y si esa señal ha acertado antes en ese activo. El precio de entrada es una bajada normal de una semana para ese activo: se alcanza más o menos la mitad de las veces.</div>
         ${good.length ? good.map(card).join('') : '<div class="muted">Hoy ningún activo destaca para comprar: todos están cerca de su reparto o con señal de precaución. Esperar también es una decisión.</div>'}</div>
       <div class="card"><h2>🌍 Fuera de tu cartera</h2>
-        <div class="small muted" style="margin-bottom:6px">Revisados ${(window.WATCHLIST || []).length} activos grandes del mercado (ETFs, acciones de EE. UU., Europa y España). Aquí solo cuenta la señal de la app, que es la parte menos fiable, así que si te interesa alguno empieza con poco (por ejemplo, un 2-3% de tu cartera).</div>
-        ${outside.length ? outside.map((r, i) => `<div class="opp"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.w.name)}</b><span class="dot ${r.ev.kind}"></span></div>
-          <div class="small muted">${esc(r.w.tag)} · ${esc(r.w.yahoo)}${r.y1 != null ? ` · último año <span class="${cls(r.y1)}">${pctS(r.y1)}</span>` : ''}</div>
-          <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Precio de entrada orientativo</span><b class="up">${num(r.limit, 2)} €</b></div></div>
-          <div class="small muted" style="margin-top:4px">La app dice «${esc(r.ev.label)}».</div></div>`).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
+        <div class="small muted" style="margin-bottom:6px">Revisados ${num(watchN, 0)} activos: ${(window.WATCHLIST || []).length} en el móvil (ETFs, grandes de EE. UU., Euro Stoxx 50 e IBEX 35)${scan ? ` y ${scan.scanned} del S&P 500 y Nasdaq 100 cada noche (último: ${esc(scan.date)})` : ''}. Aquí solo cuenta la señal de la app, que es la parte menos fiable, así que si te interesa alguno empieza con poco (por ejemplo, un 2-3% de tu cartera).</div>
+        ${outside.length ? outside.map((r, i) => oppOut(r, i)).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
+      <div class="card" id="ownCard"><h2>⭐ Tu lista</h2><div class="small muted" style="margin-bottom:6px">Activos que quieres vigilar aunque no los tengas. Aquí salen siempre, con la señal que tengan.</div>
+        ${own.map((r, i) => r ? oppOut(r, i, settings.watch[i].yahoo) : `<div class="reason small">${esc(settings.watch[i].name)}: sin datos ahora <button class="icon" data-wdel="${esc(settings.watch[i].yahoo)}">✕</button></div>`).join('') || '<div class="muted small">Aún no has añadido ninguno.</div>'}
+        <input id="wq" placeholder="Añadir: busca por nombre o ticker (ej. Coca-Cola, KO)" style="margin-top:8px"><div id="wres"></div></div>
       ${wait.length ? `<div class="card"><h2>⏸️ Mejor esperar</h2>${wait.map(r => `<div class="reason small"><b>${esc(r.a.name)}</b>: ${r.b === 'caut' || r.b === 'sell' ? `la app dice «${esc(r.ev.label)}»` : `ya pesa ${num(r.g.cw * 100, 1)}% (propuesto ${num(r.g.tw * 100, 1)}%)`}.</div>`).join('')}</div>` : ''}
       <div class="card small muted">Fear & Greed: bolsa ${fg.stocks ? Math.round(fg.stocks.score) : '–'}, cripto ${fg.crypto ? Math.round(fg.crypto.score) : '–'}. Los precios en euros son al cambio de hoy; en Trade Republic el precio puede variar un poco según la bolsa. ${monthly ? `Las cantidades parten de tu aportación de ${eur(monthly)} al mes (Riesgo).` : 'Si pones tu aportación mensual en Riesgo > Reparto propuesto, las cantidades se ajustan a ella.'}</div>
       <div class="disclaimer">Lista orientativa generada automáticamente, no es asesoramiento financiero. Nadie sabe si un precio va a subir o bajar: la prueba histórica muestra que la app acierta la dirección poco más que el azar, y que lo que más ayuda es repartir bien y comprar de forma regular. Decide tú y no inviertas dinero que puedas necesitar.</div>`;
+    view.querySelectorAll('[data-wdel]').forEach(b => b.onclick = () => { settings.watch = (settings.watch || []).filter(x => x.yahoo !== b.dataset.wdel); save('settings', settings); renderOpps(); });
+    let tm; $('#wq').oninput = () => { clearTimeout(tm); tm = setTimeout(async () => {
+      const q = $('#wq').value.trim(); if (q.length < 2) { $('#wres').innerHTML = ''; return; }
+      try {
+        const r = await http(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=8&newsCount=0`);
+        const qs = (JSON.parse(r.text).quotes || []).filter(x => x.symbol && ['EQUITY', 'ETF', 'CRYPTOCURRENCY', 'MUTUALFUND', 'FUTURE'].includes(x.quoteType));
+        $('#wres').innerHTML = qs.map((x, i) => `<div class="asset" data-wi="${i}"><div class="grow"><div class="name">${esc(x.shortname || x.longname || x.symbol)}</div><div class="small muted">${esc(x.symbol)} · ${esc(x.exchDisp || '')}</div></div><b>+</b></div>`).join('') || '<div class="small muted">Sin resultados</div>';
+        $('#wres').querySelectorAll('[data-wi]').forEach(el => el.onclick = () => {
+          const x = qs[+el.dataset.wi];
+          const type = { EQUITY: 'Acción', ETF: 'ETF', CRYPTOCURRENCY: 'Cripto', FUTURE: 'Materia prima', MUTUALFUND: 'Fondo cotizado' }[x.quoteType] || 'Acción';
+          settings.watch = (settings.watch || []).filter(w => w.yahoo !== x.symbol).concat([{ name: x.shortname || x.longname || x.symbol, yahoo: x.symbol, type, tag: type }]);
+          save('settings', settings); toast('Añadido a tu lista'); renderOpps();
+        });
+      } catch (e) { $('#wres').innerHTML = '<div class="small warn">No se pudo buscar ahora</div>'; }
+    }, 400); };
   }
 
   // ---------- Diario de decisiones ----------

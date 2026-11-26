@@ -9,8 +9,16 @@ const SECTOR = { 'Information Technology': 'Tecnología', 'Health Care': 'Salud'
   'Communication Services': 'Comunicación', Industrials: 'Industria', Energy: 'Energía', Utilities: 'Eléctricas y agua', 'Real Estate': 'Inmobiliario', Materials: 'Materiales' };
 const uni = new Map();
 
-// S&P 500: tabla de Wikipedia (símbolo, nombre, sector).
+// S&P 500: lista pública mantenida en GitHub (datasets/s-and-p-500-companies); si falla, la tabla de Wikipedia.
 try {
+  const r = await get('https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv');
+  for (const line of r.text.split('\n').slice(1)) {
+    const f = [...line.matchAll(/("([^"]*)"|[^,]*)(,|$)/g)].map(m => m[2] ?? m[1]).slice(0, 3);
+    if (!f[0] || !/^[A-Z.]+$/.test(f[0])) continue;
+    uni.set(f[0], { sym: f[0], name: f[1], sector: SECTOR[f[2]] || '', idx: 'S&P 500' });
+  }
+} catch (e) { console.log('Lista S&P 500:', e.message); }
+if (uni.size < 400) try {
   const r = await get('https://en.wikipedia.org/w/index.php?title=List_of_S%26P_500_companies&action=raw');
   const txt = r.text.split(/\n\|\}/)[0];
   for (const row of txt.split('\n|-')) {
@@ -51,7 +59,7 @@ for (let i = 0; i < list.length; i += 4) {
       px, limit: Math.round(px * Math.exp(-0.7 * sd * Math.sqrt(5)) * 100) / 100, y1: A.changeSince(h.t, h.c, 365) });
   }));
 }
-out.sort((x, y) => y.score - x.score);
+out.sort((x, y) => y.score - x.score || (y.y1 || 0) - (x.y1 || 0));
 const res = { date: new Date().toISOString().slice(0, 10), scanned: ok, failed: fail, favorable: out.length, ccy: 'USD', top: out.slice(0, 40) };
 fs.writeFileSync(new URL('../data/scan.json', import.meta.url), JSON.stringify(res));
 const text = `Revisadas ${ok} empresas (${fail} sin datos). Favorables: ${out.length}. Primeras: ${out.slice(0, 10).map(x => x.sym + ' ' + x.score).join(', ')}`;
