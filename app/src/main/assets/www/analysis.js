@@ -329,7 +329,7 @@
    * se mide cuánto se mueve semana a semana en los últimos 3 años y se proyecta sin suponer que sube ni que baja.
    * 80% de probabilidad de terminar dentro del rango si el comportamiento se parece al de estos años.
    */
-  function priceRanges(w, price) {
+  function priceRanges(w, price, calib) {
     const c = w && w.c;
     if (!c || c.length < 30 || !(price > 0)) return null;
     const start = Math.max(1, c.length - 156);
@@ -342,13 +342,90 @@
     const out = [];
     for (const [weeks, label] of [[4, '1 mes'], [13, '3 meses'], [52, '12 meses']]) {
       const sd = sdW * Math.sqrt(weeks);
-      const low = price * Math.exp(-z * sd), high = price * Math.exp(z * sd);
-      out.push({ weeks, label, low, mid: price, high, lowPct: low / price - 1, midPct: 0, highPct: high / price - 1, volYear: sdW * Math.sqrt(52), years: Math.round(lr.length / 52) });
+      // Si hay calibración (medida en su propio historial), se usan los percentiles 10 y 90 reales en vez de la campana teórica.
+      // Solo si hay bastantes casos independientes; a 12 meses se limita para no extrapolar rachas pasadas.
+      const k = calib && calib[weeks] && calib[weeks].indep >= ({ 4: 30, 13: 20, 52: 12 })[weeks] ? calib[weeks] : null;
+      const lim = weeks === 52 ? 1.8 : 2.5;
+      const zl = k ? Math.max(-lim, Math.min(-0.5, k.q10)) : -z, zh = k ? Math.min(lim, Math.max(0.5, k.q90)) : z;
+      const low = price * Math.exp(zl * sd), high = price * Math.exp(zh * sd);
+      out.push({ weeks, label, low, mid: price, high, lowPct: low / price - 1, midPct: 0, highPct: high / price - 1, volYear: sdW * Math.sqrt(52), years: Math.round(lr.length / 52), calibrated: !!k, coverage: k ? k.coverage : null });
     }
     return out;
   }
 
-  const api = { priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
+  /**
+   * Prueba histórica ("backtest") con el historial diario completo de un activo.
+   * Recalcula la orientación de la app cada semana usando SOLO los datos que había en ese momento
+   * (precio, medias, RSI; las noticias, el sentimiento y los directivos de entonces no están disponibles)
+   * y mira qué pasó después. También comprueba si el precio acabó dentro de los rangos que la app habría dado.
+   */
+  const BUCKETS = [['buy', 'Comprar', s => s >= 2], ['acc', 'Acumular', s => s >= 0.75 && s < 2], ['hold', 'Mantener', s => s > -0.75 && s < 0.75], ['caut', 'Precaución', s => s > -2 && s <= -0.75], ['sell', 'Reducir', s => s <= -2]];
+  function bucketOf(score) { return BUCKETS.find(b => b[2](score))[0]; }
+  function backtest(daily, opts = {}) {
+    const t = daily.t, c = daily.c, n = c.length;
+    const step = opts.step || 5, H = opts.horizon || 63;
+    if (n < 400) return null;
+    const pts = [];
+    for (let i = 260; i < n; i += step) {
+      const a = Math.max(0, i - 399);
+      const ev = evaluate({ t: t.slice(a, i + 1), c: c.slice(a, i + 1) });
+      // Rangos con la volatilidad semanal de los 3 años anteriores (semanas = cada 5 sesiones).
+      const wk = []; for (let j = i; j >= Math.max(0, i - 780); j -= 5) wk.unshift(c[j]);
+      let sdW = null;
+      if (wk.length >= 30) {
+        const lr = []; for (let j = 1; j < wk.length; j++) lr.push(Math.max(-0.7, Math.min(0.7, Math.log(wk[j] / wk[j - 1]))));
+        const m = lr.reduce((x, y) => x + y, 0) / lr.length; sdW = Math.sqrt(lr.reduce((x, y) => x + (y - m) ** 2, 0) / (lr.length - 1));
+      }
+      pts.push({ i, score: ev.score, b: bucketOf(ev.score), f21: i + 21 < n ? c[i + 21] / c[i] - 1 : null, f63: i + 63 < n ? c[i + 63] / c[i] - 1 : null, f126: i + 126 < n ? c[i + 126] / c[i] - 1 : null, f252: i + 252 < n ? c[i + 252] / c[i] - 1 : null, sdW });
+    }
+    const key = H === 21 ? 'f21' : H === 126 ? 'f126' : 'f63';
+    const stats = list => {
+      const v = list.map(p => p[key]).filter(x => x != null); const k = v.length;
+      if (!k) return { n: 0 };
+      const srt = v.slice().sort((x, y) => x - y);
+      return { n: k, indep: Math.max(1, Math.round(k * step / H)), up: v.filter(x => x > 0).length / k, avg: v.reduce((x, y) => x + y, 0) / k, med: srt[Math.floor(k / 2)], p25: srt[Math.floor(k * 0.25)], p75: srt[Math.floor(k * 0.75)] };
+    };
+    const base = stats(pts);
+    const byBucket = {}; BUCKETS.forEach(([k]) => byBucket[k] = stats(pts.filter(p => p.b === k)));
+    const favorable = stats(pts.filter(p => p.score >= 0.75)), unfavorable = stats(pts.filter(p => p.score <= -0.75));
+    // Estrategia: estar invertido salvo cuando la señal es de precaución o reducir; se revisa cada semana. Coste 0,2% por cambio.
+    let eq = 1, bh = 1, peakE = 1, peakB = 1, ddE = 0, ddB = 0, inMkt = 0, switches = 0, prevIn = true;
+    for (let k = 0; k < pts.length; k++) {
+      const p = pts[k], j0 = p.i, j1 = Math.min(n - 1, k + 1 < pts.length ? pts[k + 1].i : n - 1);
+      const inside = p.score > -0.75;
+      if (inside !== prevIn) { eq *= 0.998; switches++; prevIn = inside; }
+      for (let j = j0 + 1; j <= j1; j++) {
+        const r = c[j] / c[j - 1];
+        bh *= r; if (inside) { eq *= r; inMkt++; }
+        peakE = Math.max(peakE, eq); peakB = Math.max(peakB, bh);
+        ddE = Math.min(ddE, eq / peakE - 1); ddB = Math.min(ddB, bh / peakB - 1);
+      }
+    }
+    const days = Math.max(1, (t[n - 1] - t[pts[0].i]) / 86400), yrs = days / 365.25;
+    const strategy = { from: t[pts[0].i], years: yrs, cagr: Math.pow(eq, 1 / yrs) - 1, bhCagr: Math.pow(bh, 1 / yrs) - 1, dd: ddE, bhDd: ddB, timeIn: inMkt / Math.max(1, n - 1 - pts[0].i), switches };
+    // Rangos: cuántas veces el precio acabó dentro del rango del 80% y percentiles reales para calibrarlos.
+    const calib = {};
+    for (const [weeks, f] of [[4, 'f21'], [13, 'f63'], [52, 'f252']]) {
+      const u = pts.filter(p => p.sdW && p[f] != null).map(p => Math.log(1 + p[f]) / (p.sdW * Math.sqrt(weeks))).sort((x, y) => x - y);
+      if (u.length < 10) continue;
+      const inside = u.filter(x => Math.abs(x) <= 1.2816).length / u.length;
+      calib[weeks] = { n: u.length, indep: Math.round(u.length * step / (weeks * 5)), coverage: inside, q10: u[Math.floor(u.length * 0.1)], q90: u[Math.floor(u.length * 0.9)] };
+    }
+    return { from: t[pts[0].i], to: t[n - 1], points: pts.length, horizon: H, base, byBucket, favorable, unfavorable, strategy, calib };
+  }
+  /** Texto sencillo con la fiabilidad histórica de la señal actual. */
+  function backtestVerdict(bt, score) {
+    if (!bt || !bt.base.n) return null;
+    const b = bucketOf(score), s = bt.byBucket[b], name = BUCKETS.find(x => x[0] === b)[1];
+    if (!s || s.n < 8) return { b, name, text: `En su historial casi nunca ha dado la señal «${name}» (${s ? s.n : 0} veces), así que no hay datos para medir su fiabilidad.`, weak: true };
+    const edge = s.avg - bt.base.avg;
+    const fav = b === 'buy' || b === 'acc', unf = b === 'caut' || b === 'sell';
+    const worked = fav ? edge > 0.01 : unf ? edge < -0.01 : true;
+    const txt = `Cuando la parte técnica dio «${name}» en este activo (${s.n} semanas desde ${new Date(bt.from * 1000).getFullYear()}), 3 meses después había subido el ${(s.up * 100).toFixed(0)}% de las veces, con una media de ${signed(s.avg)}. En cualquier semana al azar: subía el ${(bt.base.up * 100).toFixed(0)}%, media ${signed(bt.base.avg)}.`;
+    return { b, name, edge, worked, weak: !worked && (fav || unf), text: txt + (fav || unf ? (worked ? ' Esta señal ha aportado algo en este activo.' : ' En este activo esta señal NO ha mejorado al azar: tómala con mucha cautela.') : '') };
+  }
+
+  const api = { backtest, backtestVerdict, bucketOf, BUCKETS, priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
   root.Analysis = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
