@@ -216,6 +216,7 @@
       delete a.seed;
       persist();
     }
+    if (a.avgEur && !(a.cost > 0) && !(a.ops && a.ops.length) && fx > 0) { a.cost = a.avgEur / fx; persist(); }
     const pos = window.Portfolio.position(a);
     const value = pos.qty * price * fx;
     const r = { a, d, price, ccy: d.meta.currency, fx, pos, value };
@@ -697,7 +698,7 @@
         <div><span>Precio medio (${esc(ccy)})</span><b>${pos.avg ? num(pos.avg) : '–'}</b></div>
         <div><span>Resultado en ${esc(ccy)}</span><b class="${cls(pl)}">${pctS(pl)}</b></div>
         <div><span>Pagado en euros</span><b>${pos.costEur ? eur(pos.costEur) : '–'}</b></div></div>
-        ${a.seeded && !ops.length ? `<div class="small warn" style="margin-top:6px">Posición estimada a partir de tu captura de Trade Republic (${esc(typeof a.seeded === 'string' ? a.seeded : '')}). La cantidad y el precio medio son aproximados; apunta tus operaciones para tener la cifra exacta.</div>` : ''}</div>
+        ${a.seeded && !ops.length && String(a.seeded).startsWith('exacta') ? `<div class="small muted" style="margin-top:6px">Datos de tu posición en Trade Republic${a.avgEur ? ': precio medio ' + num(a.avgEur, 2) + ' €' : ''}.</div>` : ''}${a.seeded && !ops.length && !String(a.seeded).startsWith('exacta') ? `<div class="small warn" style="margin-top:6px">Posición estimada a partir de tu captura de Trade Republic (${esc(typeof a.seeded === 'string' ? a.seeded : '')}). La cantidad y el precio medio son aproximados; apunta tus operaciones para tener la cifra exacta.</div>` : ''}</div>
       <div class="card"><h2>Mis operaciones</h2>
         ${ops.length ? ops.map(o => `<div class="asset"><div class="grow"><b class="${o.type === 'compra' ? 'up' : 'down'}">${o.type === 'compra' ? 'Compra' : 'Venta'}</b> ${num(o.qty, o.qty % 1 ? 4 : 0)} a ${num(o.price)} ${esc(ccy)}
           <div class="small muted">${esc(o.date)}${o.eur != null ? ' · ' + num(o.eur, 2) + ' €' : ''}</div></div><button class="icon" data-del="${esc(o.id)}">✕</button></div>`).join('')
@@ -986,6 +987,11 @@
     $('#addBtn').onclick = () => go('editar', null);
     $('#expBtn').onclick = () => { $('#backup').value = JSON.stringify({ assets, settings }); $('#backup').select(); };
     $('#impBtn').onclick = () => { try { const j = JSON.parse($('#backup').value);
+      if (j.pos && !j.assets) { // posiciones exactas del bróker: {"pos":{"id":[acciones, precio medio en €]}}
+        let n = 0;
+        Object.entries(j.pos).forEach(([id, [q, avg]]) => { const a = assets.find(x => x.id === id); if (a) { a.qty = q; a.avgEur = avg; a.costEur = q * avg; a.cost = 0; a.ops = []; delete a.seed; a.seeded = j.date ? 'exacta ' + j.date : 'exacta'; n++; } });
+        persist(); clearCache(); toast(`Cargadas ${n} posiciones`); stack.length = 0; current = { name: 'cartera' }; render(); return;
+      }
       if (j.seed && !j.assets) { // formato corto: {"seed":{"id":[valor €, % desde la compra]}, "date": "..."}
         let n = 0;
         Object.entries(j.seed).forEach(([id, [v, pc]]) => { const a = assets.find(x => x.id === id); if (a) { a.seed = { valueEur: v, pct: pc / 100, date: j.date }; a.qty = 0; a.ops = []; n++; } });
