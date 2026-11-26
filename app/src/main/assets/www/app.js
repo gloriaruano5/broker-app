@@ -358,7 +358,7 @@
         $('#sub-' + a.id).textContent = `${a.type} · ${num(sn.price * sn.fx, 2)} €${sn.ccy && sn.ccy !== 'EUR' ? ' (' + num(sn.price) + ' ' + sn.ccy + ')' : ''}`;
         if (sn.pos.qty > 0) {
           $('#px-' + a.id).textContent = eur(sn.value);
-          chEl.textContent = sn.eurRet != null ? pctS(sn.eurRet) + ' desde la compra' : '';
+          chEl.innerHTML = sn.eurRet != null ? esc(pctS(sn.eurRet)) + ' desde la compra' + (sn.plEur != null ? `<br><b>${sn.plEur >= 0 ? '+' : ''}${esc(eur(sn.plEur))}</b>` : '') : '';
           chEl.className = 'small ' + cls(sn.eurRet);
         } else {
           $('#px-' + a.id).textContent = num(sn.price * sn.fx, 2) + ' €';
