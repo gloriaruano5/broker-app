@@ -2,66 +2,9 @@
 // Usa exactamente el mismo código de análisis que la app (analysis.js). Guarda un resumen en data/backtest.json
 // (solo estadísticas de los activos, nada de las posiciones de la usuaria).
 import fs from 'node:fs';
-import vm from 'node:vm';
-
-const www = new URL('../app/src/main/assets/www/', import.meta.url);
-const ctx = { window: {} }; ctx.globalThis = ctx; vm.createContext(ctx);
-for (const f of ['assets.js', 'analysis.js']) vm.runInContext(fs.readFileSync(new URL(f, www), 'utf8'), ctx);
-const { DEFAULT_ASSETS, Analysis: A } = ctx.window;
-
-const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36';
-let cookie = '', crumb = '';
-async function get(url, h = {}) {
-  try { const r = await fetch(url, { headers: { 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}), ...h } }); return { status: r.status, text: await r.text(), headers: r.headers }; }
-  catch (e) { return { status: 0, text: String(e) }; }
-}
-async function yahooSession() {
-  const r = await fetch('https://fc.yahoo.com/', { headers: { 'User-Agent': UA }, redirect: 'manual' }).catch(() => null);
-  const sc = r && r.headers.getSetCookie ? r.headers.getSetCookie() : [];
-  cookie = sc.map(x => x.split(';')[0]).join('; ');
-  const c = await get('https://query2.finance.yahoo.com/v1/test/getcrumb');
-  crumb = c.status === 200 ? c.text.trim() : '';
-  return `cookie ${cookie ? 'sí' : 'no'}, crumb ${c.status}`;
-}
-async function yahoo(sym) {
-  for (const host of ['query2', 'query1']) {
-    const r = await get(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=max&interval=1d${crumb ? '&crumb=' + encodeURIComponent(crumb) : ''}`);
-    if (r.status !== 200) { if (host === 'query1') return { err: 'Yahoo ' + r.status }; continue; }
-    const res = JSON.parse(r.text).chart.result?.[0]; if (!res) return { err: 'Yahoo vacío' };
-    const q = res.indicators.quote[0]; const t = [], c = [];
-    (res.timestamp || []).forEach((ts, i) => { const v = q.close?.[i]; if (v != null && v > 0) { t.push(ts); c.push(v); } });
-    return { t, c, src: 'Yahoo' };
-  }
-}
-async function nasdaq(sym, cls = 'stocks') {
-  const r = await get(`https://api.nasdaq.com/api/quote/${sym}/historical?assetclass=${cls}&fromdate=1990-01-01&limit=99999`, { Accept: 'application/json', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' });
-  if (r.status !== 200) return { err: 'Nasdaq ' + r.status };
-  const rows = JSON.parse(r.text)?.data?.tradesTable?.rows; if (!rows?.length) return { err: 'Nasdaq vacío' };
-  const pts = rows.map(x => [Date.parse(x.date) / 1000, +String(x.close).replace(/[$,]/g, '')]).filter(x => x[1] > 0).sort((a, b) => a[0] - b[0]);
-  return { t: pts.map(x => x[0]), c: pts.map(x => x[1]), src: 'Nasdaq' };
-}
-async function coinbase(sym) {
-  const out = new Map(); let end = Math.floor(Date.now() / 1000);
-  for (let k = 0; k < 20; k++) {
-    const start = end - 299 * 86400;
-    const r = await get(`https://api.exchange.coinbase.com/products/${sym}/candles?granularity=86400&start=${new Date(start * 1000).toISOString()}&end=${new Date(end * 1000).toISOString()}`);
-    if (r.status !== 200) { if (!out.size) return { err: 'Coinbase ' + r.status }; break; }
-    const rows = JSON.parse(r.text); if (!rows.length) break;
-    rows.forEach(x => out.set(x[0], x[4]));
-    end = start - 86400;
-  }
-  const ts = [...out.keys()].sort((a, b) => a - b);
-  return { t: ts, c: ts.map(x => out.get(x)), src: 'Coinbase' };
-}
-const PROXY = { gold: 'GLD', water: 'CGW', china: 'MCHI', copx: 'COPX', sp500: 'SPY', japan: 'EWJ', copper: 'CPER' };
-async function history(a) {
-  const errs = [];
-  if (a.yahoo.endsWith('-USD')) { const r = await coinbase(a.yahoo); if (!r.err) return r; errs.push(r.err); }
-  const y = await yahoo(a.yahoo); if (!y.err) return y; errs.push(y.err);
-  if (!a.yahoo.includes('.') && !a.yahoo.includes('-')) { const r = await nasdaq(a.yahoo); if (!r.err) return r; errs.push(r.err); }
-  if (PROXY[a.id]) { const r = await nasdaq(PROXY[a.id], 'etf'); if (!r.err) { r.src = 'Nasdaq ' + PROXY[a.id] + ' (equivalente en EE. UU.)'; return r; } errs.push(r.err); }
-  return { err: errs.join(', ') };
-}
+import { DEFAULT_ASSETS, A, yahooSession, history, ctx } from './lib.mjs';
+const P = ctx.window.Portfolio;
+const HIST = {};
 // Estudio de factores: qué parte de la señal ayuda de verdad (rentabilidad a 3 meses frente a la media del activo).
 const FACT = {};
 // Validación por periodos: ventaja de cada señal frente a la media del mismo activo EN ESE MISMO periodo.
@@ -115,7 +58,7 @@ const cover = { 4: [], 13: [], 52: [] };
 for (const a of DEFAULT_ASSETS) {
   const h = await history(a);
   if (h.err || h.c.length < 400) { lines.push(`■ ${a.name}: sin historial suficiente (${h.err || h.c.length + ' días'})`); continue; }
-  h.id = a.id; factorStudy(h);
+  h.id = a.id; HIST[a.id] = h; factorStudy(h);
   const bt = A.backtest(h, { keepPoints: true });
   periodStats(h, bt.pts); delete bt.pts;
   if (!bt) { lines.push(`■ ${a.name}: historial corto`); continue; }
@@ -146,6 +89,56 @@ result.validation = Object.fromEntries(Object.entries(PER).map(([k, v]) => [k, {
 lines.push('');
 lines.push('FACTORES (ventaja a 3 meses frente a la media del activo; antes de 2022 | desde 2022; n = semanas):');
 for (const [k, o] of Object.entries(FACT).sort()) lines.push(`  ${k.padEnd(20)} ${o.a[1] ? pc(o.a[0] / o.a[1]) : '–'} (n=${o.a[1]}) | ${o.b[1] ? pc(o.b[0] / o.b[1]) : '–'} (n=${o.b[1]}) · ${o.assets.size} activos`);
+// ---------- Reparto de la cartera: ¿qué habría funcionado? ----------
+// Mismos activos y mismo periodo para todos los métodos. Se revisa cada mes (21 sesiones de bolsa).
+function portfolioTest(ids, fromDate) {
+  const day = ts => new Date(ts * 1000).toISOString().slice(0, 10);
+  const maps = {}; ids.forEach(id => { const m = new Map(); HIST[id].t.forEach((t, i) => m.set(day(t), HIST[id].c[i])); maps[id] = m; });
+  // Días de bolsa de EE. UU. (los del S&P 500) en los que todos tienen precio.
+  const dates = [...maps.sp500.keys()].filter(d => d >= fromDate && ids.every(id => maps[id].has(d))).sort();
+  const groups = {}; ids.forEach(id => groups[id] = DEFAULT_ASSETS.find(a => a.id === id).type === 'Cripto' ? 'Cripto' : 'Otro');
+  const volAt = (id, d) => { const c = HIST[id].c, t = HIST[id].t, end = t.findIndex(x => day(x) > d); const j = end < 0 ? c.length : end; const seg = c.slice(Math.max(0, j - 253), j); return A.volatility(seg, 250); };
+  const methods = {
+    quieta: { label: 'Reparto igual al principio y no tocar', target: () => null },
+    igual: { label: 'Mismo peso a todos, reequilibrando cada mes', target: () => Object.fromEntries(ids.map(id => [id, 1 / ids.length])) },
+    riesgo: { label: 'Pesos según riesgo, reequilibrando cada mes', target: d => P.riskWeights(Object.fromEntries(ids.map(id => [id, volAt(id, d) || 0.5])), groups, { asset: 0.15, groups: { Cripto: 0.15 } }) },
+    banda: { label: 'Pesos según riesgo, solo cuando se separan (la app)', target: d => P.riskWeights(Object.fromEntries(ids.map(id => [id, volAt(id, d) || 0.5])), groups, { asset: 0.15, groups: { Cripto: 0.15 } }), band: true }
+  };
+  const res = {};
+  for (const [k, m] of Object.entries(methods)) {
+    let val = Object.fromEntries(ids.map(id => [id, 1 / ids.length])), peak = 1, dd = 0, trades = 0, turnover = 0; const rets = [];
+    for (let i = 1; i < dates.length; i++) {
+      const before = Object.values(val).reduce((x, y) => x + y, 0);
+      ids.forEach(id => val[id] *= maps[id].get(dates[i]) / maps[id].get(dates[i - 1]));
+      const tot = Object.values(val).reduce((x, y) => x + y, 0);
+      rets.push(tot / before - 1); peak = Math.max(peak, tot); dd = Math.min(dd, tot / peak - 1);
+      if (i % 21 === 0) {
+        const tg = m.target(dates[i]); if (!tg) continue;
+        const cur = Object.fromEntries(ids.map(id => [id, val[id] / tot]));
+        const plan = m.band ? P.rebalancePlan(cur, tg, tot) : null;
+        if (m.band && !plan.some(x => x.out)) continue;
+        let moved = 0; ids.forEach(id => { moved += Math.abs(tg[id] * tot - val[id]); if (Math.abs(tg[id] - cur[id]) > 0.002) trades++; });
+        turnover += moved / 2 / tot;
+        const cost = moved * 0.001; // comisión aproximada (Trade Republic: 1 € por orden; aquí 0,1%)
+        ids.forEach(id => val[id] = tg[id] * (tot - cost));
+      }
+    }
+    const tot = Object.values(val).reduce((x, y) => x + y, 0), yrs = rets.length / 252;
+    const mean = rets.reduce((x, y) => x + y, 0) / rets.length, sd = Math.sqrt(rets.reduce((x, y) => x + (y - mean) ** 2, 0) / rets.length);
+    res[k] = { label: m.label, cagr: Math.pow(tot, 1 / yrs) - 1, vol: sd * Math.sqrt(252), dd, sharpe: mean / sd * Math.sqrt(252), trades, turnoverYear: turnover / yrs };
+  }
+  return { from: dates[0], to: dates[dates.length - 1], ids, res };
+}
+const pfIds = Object.keys(HIST).filter(id => HIST[id].t[0] <= Date.parse('2018-08-01') / 1000);
+if (pfIds.includes('sp500') && pfIds.length >= 5) {
+  const pt = portfolioTest(pfIds, '2018-08-01');
+  // Validación: el mismo test en dos mitades.
+  const pt2 = portfolioTest(pfIds, '2022-01-01');
+  lines.push('');
+  lines.push(`REPARTO DE LA CARTERA (${pt.ids.length} activos: ${pt.ids.join(', ')}; ${pt.from} a ${pt.to}; desde 2022 entre corchetes):`);
+  for (const [k, r] of Object.entries(pt.res)) { const r2 = pt2.res[k]; lines.push(`  ${r.label}: ${pc(r.cagr)}/año, volatilidad ${pc(r.vol)}, caída máx ${pc(r.dd)}, rentabilidad/riesgo ${r.sharpe.toFixed(2)}, ${r.trades} órdenes [${pc(r2.cagr)}/año, caída ${pc(r2.dd)}, r/r ${r2.sharpe.toFixed(2)}]`); }
+  result.portfolio = { full: pt, since2022: pt2 };
+}
 const text = lines.join('\n');
 console.log(text);
 if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '```\n' + text + '\n```\n');

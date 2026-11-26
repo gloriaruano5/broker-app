@@ -178,7 +178,45 @@
     return v;
   }
 
-  const api = { position, savingsTax, alignReturns, correlation, maxDrawdown, stdev, portfolioRisk, allocation, concentrationWarnings, valuation, BRACKETS };
+  /**
+   * Pesos según riesgo ("paridad de riesgo" sencilla): cada activo pesa en proporción inversa a su volatilidad,
+   * para que ninguno domine las subidas y bajadas de la cartera. Con topes por activo y por grupo (p. ej. cripto).
+   * vols = {id: volatilidad anual}, groups = {id: grupo}, caps = {asset: 0.15, groups: {Cripto: 0.15}}
+   */
+  function riskWeights(vols, groups = {}, caps = {}) {
+    const ids = Object.keys(vols).filter(id => vols[id] > 0);
+    if (!ids.length) return {};
+    let w = {}; ids.forEach(id => w[id] = 1 / Math.max(0.05, vols[id]));
+    const norm = () => { const t = ids.reduce((s, id) => s + w[id], 0); ids.forEach(id => w[id] /= t); };
+    norm();
+    const capA = caps.asset || 1, capG = caps.groups || {};
+    for (let it = 0; it < 20; it++) {
+      let excess = 0; const free = [];
+      ids.forEach(id => { if (w[id] > capA) { excess += w[id] - capA; w[id] = capA; } });
+      for (const [g, cap] of Object.entries(capG)) {
+        const gi = ids.filter(id => groups[id] === g), gw = gi.reduce((s, id) => s + w[id], 0);
+        if (gw > cap) { gi.forEach(id => { const nw = w[id] * cap / gw; excess += w[id] - nw; w[id] = nw; }); }
+      }
+      if (excess < 1e-9) break;
+      // El sobrante se reparte entre los que no han tocado tope, en la misma proporción inversa a la volatilidad.
+      ids.forEach(id => { const g = groups[id]; const gFull = g && capG[g] != null && ids.filter(j => groups[j] === g).reduce((s, j) => s + w[j], 0) >= capG[g] - 1e-9; if (w[id] < capA - 1e-9 && !gFull) free.push(id); });
+      if (!free.length) break;
+      const base = free.reduce((s, id) => s + 1 / Math.max(0.05, vols[id]), 0);
+      free.forEach(id => w[id] += excess * (1 / Math.max(0.05, vols[id])) / base);
+    }
+    norm();
+    return w;
+  }
+  /** Diferencias entre el reparto actual y el propuesto; avisa cuando un activo se separa más de la banda. */
+  function rebalancePlan(current, target, total, band = 0.25, minPts = 0.02) {
+    return Object.keys({ ...current, ...target }).map(id => {
+      const cw = current[id] || 0, tw = target[id] || 0, diff = tw - cw;
+      const out = Math.abs(diff) > Math.max(minPts, tw * band);
+      return { id, cw, tw, diff, eur: diff * total, out };
+    }).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  }
+
+  const api = { riskWeights, rebalancePlan, position, savingsTax, alignReturns, correlation, maxDrawdown, stdev, portfolioRisk, allocation, concentrationWarnings, valuation, BRACKETS };
   root.Portfolio = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
