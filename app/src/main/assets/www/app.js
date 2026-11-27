@@ -766,7 +766,7 @@
           <div style="position:absolute;top:-6px;left:calc(${pos.toFixed(1)}% - 4px);width:8px;height:28px;border-radius:4px;background:#fff;box-shadow:0 0 0 2px #0b1220"></div></div>
         <div class="row small muted" style="justify-content:space-between"><span>Vender</span><span>Reducir</span><span>Mantener</span><span>Acumular</span><span>Comprar</span></div>
         <div class="small" style="margin-top:10px">Confianza: <b>${'●'.repeat(dots)}${'○'.repeat(3 - dots)} ${ev.confidence.level.toLowerCase()}</b> · ${esc(ev.confidence.text)}</div>
-        <div class="small" style="margin-top:6px">${esc(ev.why)}</div></div>
+        ${ev.whyList && ev.whyList.length ? `<div class="small" style="margin-top:6px"><b>Lo que más pesa:</b>${ev.whyList.map(x => `<div class="${x.pro ? 'up' : 'down'}" style="margin-top:3px">${x.pro ? '✓ A favor' : '✗ En contra'}: <span style="color:var(--text)">${esc(x.text)}</span></div>`).join('')}</div>` : ''}</div>
       ${bt ? (() => { const st = bt.strategy, yr = new Date(st.from * 1000).getFullYear();
         const cov = bt.calib && bt.calib[13] ? bt.calib[13].coverage : null;
         return `<div class="card"><h2>¿Ha funcionado antes?</h2>

@@ -253,12 +253,13 @@
     const plus = reasons.filter(r => r.pts > 0).reduce((a, r) => a + r.pts, 0);
     const minus = -reasons.filter(r => r.pts < 0).reduce((a, r) => a + r.pts, 0);
     const agreement = plus + minus ? Math.abs(plus - minus) / (plus + minus) : 0;
-    const possible = extra.valuation !== undefined ? 7 : 5;
+    // Tipos posibles: gráfica (tendencia y RSI), noticias y sentimiento siempre; en acciones con datos oficiales, también directivos, fondos, valoración y analistas.
+    const possible = Math.max(cats.size, extra.valuation !== undefined ? 8 : 5);
     const coverage = Math.min(1, cats.size / possible);
     const cScore = agreement * 0.6 + coverage * 0.4;
     const confidence = {
       level: cScore >= 0.65 ? 'Alta' : cScore >= 0.4 ? 'Media' : 'Baja',
-      text: `${reasons.filter(r => r.pts > 0).length} señales a favor y ${reasons.filter(r => r.pts < 0).length} en contra; ${cats.size} de ${possible} tipos de datos disponibles.` +
+      text: `${(n => n + (n === 1 ? ' señal' : ' señales'))(reasons.filter(r => r.pts > 0).length)} a favor y ${reasons.filter(r => r.pts < 0).length} en contra; ${cats.size} de ${possible} tipos de datos con información hoy.` +
         (agreement < 0.3 ? ' Las señales se contradicen, así que la orientación es débil.' : '')
     };
     // Régimen de mercado: según la prueba histórica, la señal ha sido mucho más fiable con el mercado bajista.
@@ -269,9 +270,10 @@
       if (rg.r === 'bajista' && kind !== 'y' && i < 2) { confidence.level = lv[i + 1]; confidence.text += ' Sube un nivel: con el mercado bajista, esta señal acertó bastante más en el pasado.'; }
       if (rg.r === 'alcista' && kind === 'r' && i > 0) { confidence.level = lv[i - 1]; confidence.text += ' Baja un nivel: con el mercado alcista, las señales de precaución fallaron a menudo en el pasado.'; }
     }
-    const top = reasons.filter(r => r.pts !== 0).sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 2)
-      .map(r => r.text.split(/\. /)[0].replace(/\.$/, ''));
-    const why = top.length ? 'Lo que más pesa: ' + top.join('; ') + '.' : '';
+    // Cada motivo dice si empuja a favor o en contra, para que no confunda (p. ej. una señal favorable con algo bajista).
+    const topR = reasons.filter(r => r.pts !== 0).sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts)).slice(0, 3);
+    const whyList = topR.map(r => ({ pro: r.pts > 0, text: r.text.split(/\. /)[0].replace(/\.$/, '') }));
+    const why = whyList.length ? 'Lo que más pesa: ' + whyList.map(x => (x.pro ? 'a favor, ' : 'en contra, ') + x.text).join('; ') + '.' : '';
     // Escenario más probable a corto plazo según tendencia, impulso y sobrecompra/sobreventa.
     const sc = { risks: [], watch: [] };
     const up = m.sma200 ? last > m.sma200 : (m.ch3m || 0) > 0;
@@ -286,7 +288,7 @@
     reasons.filter(r => r.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 3).forEach(r => sc.risks.push(r.text.split(/\. /)[0].replace(/\.$/, '')));
     // Posición en la barra de -1 (vender) a +1 (comprar).
     const bar = Math.max(-1, Math.min(1, score / 4));
-    return { score, label, kind, reasons, alerts, metrics: m, news: ns, confidence, why, scenario: sc, bar };
+    return { score, label, kind, reasons, alerts, metrics: m, news: ns, confidence, why, whyList, scenario: sc, bar };
   }
 
   function pct(x) { return (x * 100).toFixed(0) + '%'; }
