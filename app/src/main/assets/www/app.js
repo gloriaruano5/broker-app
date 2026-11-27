@@ -1500,7 +1500,7 @@
       fxToEur('USD').catch(() => null)
     ]);
     const seen = new Set([...mine, ...(window.WATCHLIST || []).map(w => w.yahoo)]);
-    const fromScan = scan && usd ? scan.top.filter(x => !seen.has(x.sym)).map(x => ({ w: { name: x.name, yahoo: x.sym, tag: [x.sector, x.idx].filter(Boolean).join(' · ') }, score: x.score, label: x.label, kind: x.kind, b: x.b, pxEur: x.px * usd, limit: x.limit * usd, y1: x.y1, night: true, fx: usd, dealFiling: x.dealFiling || null })) : [];
+    const fromScan = scan && usd ? scan.top.filter(x => !seen.has(x.sym)).map(x => ({ w: { name: x.name, yahoo: x.sym, tag: [x.sector, x.idx].filter(Boolean).join(' · ') }, score: x.score, label: x.label, kind: x.kind, b: x.b, pxEur: x.px * usd, limit: x.limit * usd, y1: x.y1, night: true, fx: usd, dealFiling: x.dealFiling || null, tb: x.tb || 0 })) : [];
     // Segunda vuelta: los 14 mejores por precio se analizan a fondo (noticias, analistas, cuentas, geopolítica…) y se reordenan.
     const pre = [...phoneRes.filter(r => !mine.has(r.w.yahoo)), ...fromScan].filter(r => r.b === 'buy' || r.b === 'acc').sort((x, y) => y.score - x.score).slice(0, 20);
     const deep = await Promise.all(pre.map(async r => {
@@ -1515,7 +1515,10 @@
       } catch (e) { return r; }
     }));
     // Objetivo: la mayor rentabilidad de la forma más fiable. A igual señal, va antes el que menos oscila (ajuste por riesgo).
-    const riskAdj = r => r.score - 3 * Math.max(0, (r.sdD || 0) * Math.sqrt(252) - 0.3);
+    // Desempate con datos que no son el precio: objetivo medio de los analistas y tono de las noticias.
+    const tbOf = r => { const ys = r.extra && r.extra.summary, up = ys && ys.targetPrice && r.pxEur && r.fx ? ys.targetPrice / (r.pxEur / r.fx) - 1 : null;
+      const tone = r.ev && r.ev.news ? r.ev.news.avg || 0 : 0; return up != null ? Math.max(-0.3, Math.min(0.3, up)) + 0.2 * Math.max(-1, Math.min(1, tone)) : (r.tb || 0) + 0.2 * Math.max(-1, Math.min(1, tone)); };
+    const riskAdj = r => r.score - 3 * Math.max(0, (r.sdD || 0) * Math.sqrt(252) - 0.3) + tbOf(r);
     // Solo se proponen los confirmados: analizados a fondo, sin oferta de compra (precio fijado) y con al menos 3 tipos de datos que lo respalden.
     const dropped = deep.filter(r => r.ev && r.ev.deal).map(r => r.w.name);
     const outside = deep.filter(r => r.deep && r.ev && !r.ev.deal && (r.ev.cats || []).length >= 3 && (r.b === 'buy' || r.b === 'acc')).sort((x, y) => riskAdj(y) - riskAdj(x)).slice(0, 8);

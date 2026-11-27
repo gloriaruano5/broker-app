@@ -91,9 +91,9 @@ async function confirm(x) {
   try { const j = JSON.parse(fr.text).data; const rows = [...((j.quarterlyForecast || {}).rows || []).slice(0, 1), ...((j.yearlyForecast || {}).rows || []).slice(0, 1)];
     if (rows.length) { leading.revUp = rows.reduce((a, r) => a + (num(r.up) || 0), 0); leading.revDown = rows.reduce((a, r) => a + (num(r.down) || 0), 0); chk.analysts = true; } } catch (e) {}
   try { const j = JSON.parse(rr.text).data; if (j.meanRatingType) { leading.rating = j.meanRatingType; chk.analysts = true; } } catch (e) {}
-  let pe = null, fpe = null;
+  let pe = null, fpe = null, target = null;
   try { const sd = JSON.parse(sr.text).data.summaryData; const f = k => { const e = Object.entries(sd).find(([kk]) => kk.toLowerCase() === k.toLowerCase()); return e ? num(e[1].value) : null; };
-    pe = f('PERatio'); fpe = f('ForwardPE1Yr'); chk.valuation = pe != null || fpe != null;
+    pe = f('PERatio'); fpe = f('ForwardPE1Yr'); target = f('OneYrTarget'); chk.valuation = pe != null || fpe != null || target != null;
     if (!dbg++) console.log('Nasdaq summary', x.sym, sr.status, Object.keys(sd).join(',')); } catch (e) { if (!dbg++) console.log('Nasdaq summary', x.sym, sr.status, String(sr.text).slice(0, 200)); }
   const ev = A.evaluate(x.h, { regime, news: nw, dealNews: dn, name: x.name, dealFiling, fearGreed: fg && fg.stocks, leading: Object.keys(leading).length ? leading : null });
   let score = ev.score; const extraR = [];
@@ -101,10 +101,18 @@ async function confirm(x) {
   if (pe != null && pe > 0 && fpe != null && fpe > 0 && fpe < pe * 0.85) { score += 0.25; extraR.push({ pts: 0.25, text: `Se espera que el beneficio crezca (PER ${pe.toFixed(0)} → ${fpe.toFixed(0)} el año que viene).` }); }
   if ((pe != null && pe > 60) || (fpe != null && fpe > 45)) { score -= 0.5; extraR.push({ pts: -0.5, text: `Valoración exigente (PER ${(pe ?? fpe).toFixed(0)}): si decepciona, puede caer mucho.` }); }
   if (pe == null && fpe != null && fpe < 0) { score -= 0.5; extraR.push({ pts: -0.5, text: 'La empresa está en pérdidas.' }); }
+  // Precio objetivo medio de los analistas a 12 meses frente al precio de hoy.
+  const upside = target && x.px ? target / x.px - 1 : null;
+  if (upside != null && upside > 0.15) extraR.push({ pts: 0.25, text: `Los analistas ven de media un ${Math.round(upside * 100)}% de subida a 12 meses.` });
+  if (upside != null && upside < 0) { score -= 0.5; extraR.push({ pts: -0.5, text: `El precio ya está por encima del objetivo medio de los analistas (${Math.round(upside * 100)}%).` }); }
+  if (upside != null && upside > 0.15) score += 0.25;
   const reasons = [...ev.reasons.filter(r => r.pts), ...extraR];
+  // Desempate continuo con datos distintos del precio: objetivo de analistas, revisiones de beneficio y tono de las noticias.
+  const rv = (leading.revUp || 0) + (leading.revDown || 0), tone = ev.news ? ev.news.avg || 0 : 0;
+  const tb = Math.max(-0.3, Math.min(0.3, upside || 0)) + (rv ? 0.2 * (leading.revUp - leading.revDown) / rv : 0) + 0.2 * Math.max(-1, Math.min(1, tone));
   const n = Object.values(chk).filter(Boolean).length + 1; // + la gráfica
   return { ...x, score: Math.round(score * 100) / 100, label: ev.label, kind: ev.kind, b: A.bucketOf(score), deal: ev.deal ? (dealFiling || (ev.deal.news[0] || 'precio fijado')) : (dealFiling && pin && pin.pinned ? dealFiling : null), dealFiling,
-    pinned: !!(pin && pin.pinned), checks: chk, sources: n, rating: leading.rating || null, pe, fpe,
+    pinned: !!(pin && pin.pinned), checks: chk, sources: n, rating: leading.rating || null, pe, fpe, upside: upside != null ? Math.round(upside * 1000) / 1000 : null, tb: Math.round(tb * 1000) / 1000,
     pro: reasons.filter(r => r.pts > 0).sort((a, b) => b.pts - a.pts).slice(0, 3).map(r => r.text), con: reasons.filter(r => r.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 3).map(r => r.text) };
 }
 // Se contrastan las 80 mejores por precio (de 4 en 4 para no saturar las fuentes).
@@ -115,7 +123,7 @@ const discarded = preDiscard.concat(conf.filter(x => x.deal || x.pinned).map(x =
 // Solo se proponen las confirmadas: sin oferta de compra ni precio fijado, señal favorable tras todo el contraste y al menos 4 fuentes con datos.
 const good = conf.filter(x => !x.err && !x.deal && !x.pinned && (x.b === 'buy' || x.b === 'acc') && x.sources >= 4);
 // Orden: la señal completa ajustada por riesgo (a señal parecida, primero el que menos oscila).
-const ra = x => x.score - 3 * Math.max(0, x.vol - 0.3);
+const ra = x => x.score - 3 * Math.max(0, x.vol - 0.3) + (x.tb || 0);
 good.sort((x, y) => ra(y) - ra(x));
 good.forEach(x => delete x.h); out.forEach(x => delete x.h);
 const res = { date: new Date().toISOString().slice(0, 10), scanned: ok, failed: fail, favorable: out.length, checked: conf.length, confirmed: good.length, discarded, ccy: 'USD', top: good.slice(0, 40) };
