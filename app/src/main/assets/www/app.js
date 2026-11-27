@@ -485,8 +485,16 @@
 
   // ---------- Vista: Detalle ----------
   const DETAIL_TABS = [['analisis', 'Análisis'], ['grafica', 'Gráfica'], ['noticias', 'Noticias'], ['geo', 'Geopolítica'], ['oficial', 'Oficial'], ['fondos', 'Grandes fondos'], ['posicion', 'Mi posición']];
+  // Activos que no están en tu cartera (desde Oportunidades): se abren con las pestañas que no necesitan posición.
+  const tempAssets = {};
+  function openExternal(w, tab = 'grafica') {
+    const id = 'x:' + w.yahoo;
+    tempAssets[id] = { id, name: w.name, yahoo: w.yahoo, type: w.type || (/-USD$/.test(w.yahoo) ? 'Cripto' : 'Acción'), news: w.name, themes: [], external: true };
+    go('detalle', id); current.tab = tab; render();
+  }
   async function renderDetail(id) {
-    const a = assets.find(x => x.id === id); if (!a) return go('cartera', null, false);
+    const a = assets.find(x => x.id === id) || tempAssets[id]; if (!a) return go('cartera', null, false);
+    if (a.external && !['analisis', 'grafica', 'noticias'].includes(current.tab)) current.tab = 'grafica';
     const tab = current.tab || 'analisis';
     $('#title').textContent = a.name;
     view.innerHTML = `
@@ -494,7 +502,7 @@
         <div class="big" id="dPx">…</div><div id="dCh" style="font-size:16px;font-weight:600"></div></div></div>
         <div class="pills" id="perPills" style="margin-top:8px"></div>
         ${a.note ? `<div class="small warn" style="margin-top:6px">${esc(a.note)}</div>` : ''}</div>
-      <div class="pills">${DETAIL_TABS.map(([k, l]) => `<button class="pill ${k === tab ? 'on' : ''}" data-t="${k}">${l}</button>`).join('')}</div>
+      <div class="pills">${DETAIL_TABS.filter(([k]) => !a.external || ['analisis', 'grafica', 'noticias'].includes(k)).map(([k, l]) => `<button class="pill ${k === tab ? 'on' : ''}" data-t="${k}">${l}</button>`).join('')}</div>
       <div id="tabBody"><div class="loading">Cargando…</div></div>`;
     view.querySelectorAll('.pill[data-t]').forEach(b => b.onclick = () => { current.tab = b.dataset.t; renderDetail(id); });
     let d;
@@ -1212,7 +1220,7 @@
     return `Acierto histórico: tras esta señal bajó a 3 meses el ${p(1 - s.up)} de las veces (en general, el ${p(1 - base.up)}). ${1 - s.up > 1 - base.up + 0.03 ? 'Aquí ha servido algo para evitar caídas.' : 'Aquí NO ha acertado más que el azar: tómalo con mucha cautela.'}`;
   }
   function oppOut(r, i, del) {
-    return `<div class="opp"><div class="row"><span class="badge">${del ? '★' : i + 1}</span><b class="grow" style="font-size:16px">${esc(r.w.name)}</b><span class="dot ${r.kind}"></span>${del ? `<button class="icon" data-wdel="${esc(del)}">✕</button>` : ''}</div>
+    return `<div class="opp" data-open="${esc(r.ownId || '')}" data-sym="${esc(r.w.yahoo)}" data-nm="${esc(r.w.name)}"><div class="row"><span class="badge">${del ? '★' : i + 1}</span><b class="grow" style="font-size:16px">${esc(r.w.name)}</b><span class="dot ${r.kind}"></span>${del ? `<button class="icon" data-wdel="${esc(del)}">✕</button>` : ''}</div>
       <div class="small muted">${esc(r.w.tag)} · ${esc(r.w.yahoo)}${r.y1 != null ? ` · último año <span class="${cls(r.y1)}">${pctS(r.y1)}</span>` : ''}</div>
       <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
       ${targetBlock(r.pxEur, r.limit, r.bt, r.b)}
@@ -1274,7 +1282,7 @@
     const own = (settings.watch || []).length ? (await Promise.all(settings.watch.map(evalW))) : [];
     if (current.name !== 'oportunidades') return;
     const balance = rows.filter(r => r.b !== 'caut' && r.b !== 'sell' && r.diff > 0.005).sort((x, y) => y.diff - x.diff || y.ev.score - x.ev.score).slice(0, 5);
-    const asSig = r => ({ w: { name: r.a.name, yahoo: r.a.yahoo, tag: 'En tu cartera' }, score: r.ev.score, label: r.ev.label, kind: r.ev.kind, b: r.b, pxEur: r.pxEur, limit: r.limit, y1: A.changeSince(r.sn.d.t, r.sn.d.c, 365), hist: histText(r.bt, r.b), bt: r.bt });
+    const asSig = r => ({ ownId: r.a.id, w: { name: r.a.name, yahoo: r.a.yahoo, tag: 'En tu cartera' }, score: r.ev.score, label: r.ev.label, kind: r.ev.kind, b: r.b, pxEur: r.pxEur, limit: r.limit, y1: A.changeSince(r.sn.d.t, r.sn.d.c, 365), hist: histText(r.bt, r.b), bt: r.bt });
     const clear = [...rows.filter(r => r.b === 'buy' || r.b === 'acc').map(asSig), ...outside].sort((x, y) => y.score - x.score).slice(0, 10);
     const sells = rows.filter(r => r.sn.pos.qty > 0 && (r.b === 'caut' || r.b === 'sell')).sort((x, y) => x.ev.score - y.ev.score);
     const heavy = rows.filter(r => r.g && r.g.out && r.diff < 0 && r.b !== 'caut' && r.b !== 'sell');
@@ -1284,7 +1292,7 @@
       const when = r.b === 'buy' || r.b === 'acc'
         ? `Puedes comprar ahora o poner una <b>orden límite a ${num(r.limit, 2)} €</b> válida una semana.`
         : `Sin prisa: pon una <b>orden límite a ${num(r.limit, 2)} €</b> válida una semana. Si no se ejecuta, cómpralo con tu próxima aportación al precio que esté.`;
-      return `<div class="opp"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
+      return `<div class="opp" data-open="${esc(r.a.id)}"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
         <div class="kv" style="margin-top:8px"><div><span>Pesa ahora / propuesto</span><b>${num(r.g.cw * 100, 1)}% → ${num(r.g.tw * 100, 1)}%</b></div>${amt ? `<div><span>Cuánto, orientativo</span><b>${eur(amt)}</b></div>` : ''}
         <div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
         <div class="small" style="margin-top:6px">${when}</div>
@@ -1293,16 +1301,16 @@
     };
     const sellCard = r => {
       const pl = r.sn.plEur;
-      return `<div class="opp"><div class="row"><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
+      return `<div class="opp" data-open="${esc(r.a.id)}"><div class="row"><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
         <div class="kv" style="margin-top:8px"><div><span>Fuerza de la señal</span><b class="down">${strength(r.ev.score)}</b></div><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div>
         ${pl != null ? `<div><span>Ganas o pierdes</span><b class="${cls(pl)}">${pl >= 0 ? '+' : ''}${eur(pl)}</b></div>` : ''}<div><span>Pesa en tu cartera</span><b>${r.g ? num(r.g.cw * 100, 1) + '%' : '–'}</b></div></div>
         <div class="small" style="margin-top:6px">La app dice «${esc(r.ev.label)}». ${r.b === 'sell' ? 'Plantéate vender una parte o poner un precio de salida (stop) en «Mi posición».' : 'Mejor no comprar más; si te preocupa, pon un precio de salida (stop) en «Mi posición» en vez de vender todo de golpe.'}</div>
         <div class="small muted" style="margin-top:4px">${histText(r.bt, r.b)}${pl != null ? (pl > 0 ? ' Si vendes, pagarás impuestos por la ganancia.' : ' Si vendes con pérdidas, puedes restarlas de tus ganancias del año (ojo con la regla de los 2 meses si vuelves a comprar).') : ''}</div></div>`;
     };
-    view.innerHTML = `<div class="card"><h2>⚖️ Para equilibrar tu cartera</h2>
+    view.innerHTML = `<div class="card"><h2>⚖️ Para equilibrar tu cartera</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
         <div class="small muted" style="margin-bottom:6px">Activos tuyos que se han quedado por debajo del reparto propuesto. Completar el reparto con dinero nuevo es lo que mejor ha funcionado en la prueba histórica, aunque la señal no sea de compra clara. El precio de entrada es una bajada normal de una semana: se alcanza más o menos la mitad de las veces.</div>
         ${balance.length ? balance.map(card).join('') : '<div class="muted small">Tu cartera está cerca del reparto propuesto: no hace falta equilibrar.</div>'}</div>
-      <div class="card"><h2>📈 Señales claras de compra</h2>
+      <div class="card"><h2>📈 Señales claras de compra</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
         <div class="small muted" style="margin-bottom:6px">Las de señal más favorable, estén o no en tu cartera y sin mirar su peso. Revisados tus activos y ${num(watchN, 0)} más: ${(window.WATCHLIST || []).length} en el móvil (ETFs, grandes de EE. UU., Euro Stoxx 50 e IBEX 35)${scan ? ` y ${scan.scanned} del S&P 500 y Nasdaq 100 cada noche (último: ${esc(scan.date)})` : ''}. La señal sola acierta poco más que el azar: si compras algo nuevo, empieza con poco (un 2-3% de tu cartera).</div>
         ${clear.length ? clear.map((r, i) => oppOut(r, i)).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
       <div class="card"><h2>📉 Para vender o reducir</h2>
@@ -1314,7 +1322,12 @@
         <input id="wq" placeholder="Añadir: busca por nombre o ticker (ej. Coca-Cola, KO)" style="margin-top:8px"><div id="wres"></div></div>
       <div class="card small muted">Fear & Greed: bolsa ${fg.stocks ? Math.round(fg.stocks.score) : '–'}, cripto ${fg.crypto ? Math.round(fg.crypto.score) : '–'}. Los precios en euros son al cambio de hoy; en Trade Republic el precio puede variar un poco según la bolsa. ${monthly ? `Las cantidades parten de tu aportación de ${eur(monthly)} al mes (Riesgo).` : 'Si pones tu aportación mensual en Riesgo > Reparto propuesto, las cantidades se ajustan a ella.'}</div>
       <div class="disclaimer">Lista orientativa generada automáticamente, no es asesoramiento financiero. Nadie sabe si un precio va a subir o bajar: la prueba histórica muestra que la app acierta la dirección poco más que el azar, y que lo que más ayuda es repartir bien y comprar de forma regular. Decide tú y no inviertas dinero que puedas necesitar.</div>`;
-    view.querySelectorAll('[data-wdel]').forEach(b => b.onclick = () => { settings.watch = (settings.watch || []).filter(x => x.yahoo !== b.dataset.wdel); save('settings', settings); renderOpps(); });
+    view.querySelectorAll('.opp[data-open]').forEach(el => el.onclick = e => {
+      if (e.target.closest('button')) return;
+      if (el.dataset.open) { go('detalle', el.dataset.open); current.tab = 'grafica'; render(); }
+      else openExternal({ name: el.dataset.nm, yahoo: el.dataset.sym });
+    });
+    view.querySelectorAll('[data-wdel]').forEach(b => b.onclick = e => { e.stopPropagation(); settings.watch = (settings.watch || []).filter(x => x.yahoo !== b.dataset.wdel); save('settings', settings); renderOpps(); });
     let tm; $('#wq').oninput = () => { clearTimeout(tm); tm = setTimeout(async () => {
       const q = $('#wq').value.trim(); if (q.length < 2) { $('#wres').innerHTML = ''; return; }
       try {

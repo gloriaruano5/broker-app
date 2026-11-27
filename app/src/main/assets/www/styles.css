@@ -124,3 +124,5 @@ label { font-size: 13px; color: var(--muted); }
 .target { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--stripe); border: 1px dashed var(--line); }
 .kv3 { grid-template-columns: 1fr 1fr 1fr; }
 .kv3 b { font-size: 13px; }
+.opp[data-open] { cursor: pointer; }
+.opp[data-open]:active { filter: brightness(1.08); }
