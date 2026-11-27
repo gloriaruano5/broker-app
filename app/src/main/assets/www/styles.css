@@ -121,3 +121,6 @@ label { font-size: 13px; color: var(--muted); }
 .themes button { width: 74px; border: 2px solid var(--line); border-radius: 12px; padding: 6px 0 4px; background: none; color: var(--text); font-size: 11px; }
 .themes button i { display: block; width: 36px; height: 36px; margin: 0 auto 4px; border-radius: 50%; border: 1px solid rgba(128, 128, 128, .5); }
 .themes button.on { border-color: var(--accent); }
+.target { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--stripe); border: 1px dashed var(--line); }
+.kv3 { grid-template-columns: 1fr 1fr 1fr; }
+.kv3 b { font-size: 13px; }

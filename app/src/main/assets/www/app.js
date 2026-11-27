@@ -1187,6 +1187,21 @@
   // La prueba histórica dice que la señal sola apenas acierta la dirección, pero que comprar lo que se ha quedado
   // por debajo del reparto propuesto (rebalancear con dinero nuevo) sí mejoró el resultado y redujo caídas.
   // Por eso la lista combina: hueco en el reparto (lo que más pesa), la señal de la app y si la señal ha funcionado antes en ese activo.
+  /** Precio de entrada y hasta dónde podría llegar: rango de 8 de cada 10 casos según lo que se mueve el activo y, si hay historial, lo que pasó tras esta misma señal. */
+  function targetBlock(pxEur, limit, bt, b) {
+    const sd = limit > 0 && pxEur > 0 ? -Math.log(limit / pxEur) / (0.7 * Math.sqrt(5)) : 0;
+    if (!(sd > 0)) return '';
+    // A 12 meses se amplía la campana (z 1,45), como en el resto de la app: la prueba histórica dio menos aciertos con 1,28.
+    const rg = (days, z = 1.2816) => [pxEur * Math.exp(-z * sd * Math.sqrt(days)), pxEur * Math.exp(z * sd * Math.sqrt(days))];
+    const [l1, h1] = rg(21), [l3, h3] = rg(63), [l12, h12] = rg(252, 1.45);
+    const s = bt && bt.byBucket && bt.byBucket[b];
+    const hist = s && s.n >= 8 && (s.indep || 0) >= 4 && s.p25 != null
+      ? `<div class="small muted" style="margin-top:4px">Tras esta misma señal en este activo, a 3 meses lo habitual fue entre <b>${pctS(s.p25)}</b> y <b>${pctS(s.p75)}</b> (la mitad de las veces, más de ${pctS(s.med)}): entre ${num(pxEur * (1 + s.p25), 2)} € y ${num(pxEur * (1 + s.p75), 2)} €.</div>` : '';
+    const cell = (t, l, h) => `<div><span>${t}</span><b class="up" style="display:block">↑ ${num(h, 2)} €</b><b class="down" style="display:block">↓ ${num(l, 2)} €</b></div>`;
+    return `<div class="target"><div class="small"><b>Hasta dónde podría llegar</b> (8 de cada 10 veces; puede subir o bajar):</div>
+      <div class="kv kv3" style="margin-top:4px">${cell('En 1 mes', l1, h1)}${cell('En 3 meses', l3, h3)}${cell('En 1 año', l12, h12)}</div>${hist}
+      <div class="small muted" style="margin-top:4px">A largo plazo el rango es muy ancho: lo que acabe pasando depende sobre todo de cómo le vaya al negocio (o al mercado, en un ETF), no de la señal de hoy.</div></div>`;
+  }
   function strength(score) { const a = Math.abs(score); return a >= 2 ? 'Fuerte' : a >= 1.25 ? 'Moderada' : 'Débil'; }
   /** Cuánto ha acertado antes esta misma señal en este activo (prueba histórica, 3 meses después). */
   function histText(bt, b) {
@@ -1199,7 +1214,8 @@
   function oppOut(r, i, del) {
     return `<div class="opp"><div class="row"><span class="badge">${del ? '★' : i + 1}</span><b class="grow" style="font-size:16px">${esc(r.w.name)}</b><span class="dot ${r.kind}"></span>${del ? `<button class="icon" data-wdel="${esc(del)}">✕</button>` : ''}</div>
       <div class="small muted">${esc(r.w.tag)} · ${esc(r.w.yahoo)}${r.y1 != null ? ` · último año <span class="${cls(r.y1)}">${pctS(r.y1)}</span>` : ''}</div>
-      <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Precio de entrada orientativo</span><b class="up">${num(r.limit, 2)} €</b></div></div>
+      <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
+      ${targetBlock(r.pxEur, r.limit, r.bt, r.b)}
       <div class="small" style="margin-top:4px">Señal: <b class="${r.score > 0 ? 'up' : r.score < 0 ? 'down' : ''}">${strength(r.score)}</b> · «${esc(r.label)}»${r.night ? ' (revisión de anoche, precio en dólares pasado a euros)' : ''}.</div>
       <div class="small muted" style="margin-top:2px">${r.hist || 'Acierto histórico: no medido para este activo.'}</div></div>`;
   }
@@ -1258,7 +1274,7 @@
     const own = (settings.watch || []).length ? (await Promise.all(settings.watch.map(evalW))) : [];
     if (current.name !== 'oportunidades') return;
     const balance = rows.filter(r => r.b !== 'caut' && r.b !== 'sell' && r.diff > 0.005).sort((x, y) => y.diff - x.diff || y.ev.score - x.ev.score).slice(0, 5);
-    const asSig = r => ({ w: { name: r.a.name, yahoo: r.a.yahoo, tag: 'En tu cartera' }, score: r.ev.score, label: r.ev.label, kind: r.ev.kind, b: r.b, pxEur: r.pxEur, limit: r.limit, y1: A.changeSince(r.sn.d.t, r.sn.d.c, 365), hist: histText(r.bt, r.b) });
+    const asSig = r => ({ w: { name: r.a.name, yahoo: r.a.yahoo, tag: 'En tu cartera' }, score: r.ev.score, label: r.ev.label, kind: r.ev.kind, b: r.b, pxEur: r.pxEur, limit: r.limit, y1: A.changeSince(r.sn.d.t, r.sn.d.c, 365), hist: histText(r.bt, r.b), bt: r.bt });
     const clear = [...rows.filter(r => r.b === 'buy' || r.b === 'acc').map(asSig), ...outside].sort((x, y) => y.score - x.score).slice(0, 10);
     const sells = rows.filter(r => r.sn.pos.qty > 0 && (r.b === 'caut' || r.b === 'sell')).sort((x, y) => x.ev.score - y.ev.score);
     const heavy = rows.filter(r => r.g && r.g.out && r.diff < 0 && r.b !== 'caut' && r.b !== 'sell');
@@ -1270,8 +1286,9 @@
         : `Sin prisa: pon una <b>orden límite a ${num(r.limit, 2)} €</b> válida una semana. Si no se ejecuta, cómpralo con tu próxima aportación al precio que esté.`;
       return `<div class="opp"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
         <div class="kv" style="margin-top:8px"><div><span>Pesa ahora / propuesto</span><b>${num(r.g.cw * 100, 1)}% → ${num(r.g.tw * 100, 1)}%</b></div>${amt ? `<div><span>Cuánto, orientativo</span><b>${eur(amt)}</b></div>` : ''}
-        <div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Precio de entrada orientativo</span><b class="up">${num(r.limit, 2)} €</b></div></div>
+        <div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
         <div class="small" style="margin-top:6px">${when}</div>
+        ${targetBlock(r.pxEur, r.limit, r.bt, r.b)}
         <div class="small muted" style="margin-top:4px">Señal de la app: «${esc(r.ev.label)}».</div></div>`;
     };
     const sellCard = r => {
