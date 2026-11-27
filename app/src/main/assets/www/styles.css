@@ -145,9 +145,19 @@ label { font-size: 13px; color: var(--muted); }
 @keyframes dotp{50%{opacity:.2}}
 .tc-row{padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer}
 .tc-row:last-of-type{border-bottom:0}
-.tc-bars{display:grid;grid-template-columns:1fr 1fr;gap:2px;margin:5px 0 3px;height:12px}
-.tc-neg,.tc-pos{background:var(--card2);border-radius:6px;overflow:hidden;display:flex}
-.tc-neg{justify-content:flex-end}
-.tc-neg div{background:var(--down);opacity:.75;height:100%;border-radius:6px 0 0 6px}
-.tc-pos div{background:var(--up);height:100%;border-radius:0 6px 6px 0}
+.tc-legend{display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--muted);margin-bottom:4px}
+.tc-legend i{display:inline-block;vertical-align:middle;margin-right:3px}
+.lg-band{width:18px;height:8px;border-radius:4px;background:color-mix(in srgb,var(--accent) 35%,transparent)}
+.lg-mid{width:3px;height:12px;background:var(--text)}
+.lg-zero{width:0;height:12px;border-left:2px dashed var(--muted)}
+.tc-prob{display:flex;height:20px;border-radius:10px;overflow:hidden;font-size:11px;font-weight:700;color:#fff;line-height:20px}
+.tc-prob .g{background:var(--up);text-align:left;padding-left:8px;white-space:nowrap}
+.tc-prob .r{background:var(--down);text-align:right;padding-right:8px;white-space:nowrap}
+.tc-strip{position:relative;height:22px;margin:8px 0 2px;background:var(--card2);border-radius:6px}
+.tc-strip .band{position:absolute;top:5px;height:12px;border-radius:6px;background:color-mix(in srgb,var(--accent) 30%,transparent)}
+.tc-strip .band2{position:absolute;top:5px;height:12px;border-radius:6px;background:color-mix(in srgb,var(--accent) 60%,transparent)}
+.tc-strip .mid{position:absolute;top:1px;width:3px;height:20px;margin-left:-1px;background:var(--text);border-radius:2px}
+.tc-strip .zero{position:absolute;top:0;bottom:0;border-left:2px dashed var(--muted)}
+.tc-strip .tgt{position:absolute;top:-12px;margin-left:-6px;font-size:12px;color:var(--warn)}
+.tc-kv{display:flex;flex-direction:column;gap:2px;margin-top:6px}
 .badge.up{color:var(--up)} .badge.warn{color:var(--warn)} .badge.down{color:var(--down)}
