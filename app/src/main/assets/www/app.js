@@ -336,7 +336,7 @@
         <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button><button class="btn sec" id="jBtn">Diario de decisiones</button></div>
         <button class="btn" id="oppBtn" style="width:100%;margin-top:8px">🎯 Oportunidades de compra de hoy</button></div>
       <div class="card" id="alertsCard"><h2>Avisos</h2><div id="alerts" class="muted small">Analizando tus activos…</div></div>
-      <div class="card"><h2>Tus activos</h2><div id="list"></div></div>
+      <div class="card"><h2>Tus activos</h2><div id="list"></div><div class="small muted" style="margin-top:6px"><span class="sigb buy">▲</span> señal fuerte de compra · <span class="sigb sell">▼</span> señal fuerte de venta (en lugar del punto de color). Salen del análisis completo: gráfica, noticias, cuentas, analistas, directivos, grandes fondos y mercado. Orientativo.</div></div>
       <div class="disclaimer">${DISCLAIMER}</div>`;
     $('#taxBtn').onclick = () => go('renta');
     $('#jBtn').onclick = () => go('diario');
@@ -344,14 +344,14 @@
     const list = $('#list');
     list.innerHTML = `<div class="phead"><span>Activo</span><span>Valor</span><span>Desde la compra</span></div>` + byValue(assets).map(a => `
       <div class="asset prow" data-id="${esc(a.id)}">
-        <div class="pname"><div class="name"><span class="dot" id="dot-${esc(a.id)}"></span><span class="nm">${esc(a.name)}</span></div><div class="sub" id="sub-${esc(a.id)}">${esc(a.type)} · ${esc(a.yahoo)}</div></div>
+        <div class="pname"><div class="name"><span class="dot" id="dot-${esc(a.id)}"></span><span class="sigb" id="sg-${esc(a.id)}" hidden></span><span class="nm">${esc(a.name)}</span></div><div class="sub" id="sub-${esc(a.id)}">${esc(a.type)} · ${esc(a.yahoo)}</div></div>
         <div class="val" id="px-${esc(a.id)}">…</div>
         <div class="chg" id="ch-${esc(a.id)}"></div>
       </div>`).join('');
     list.querySelectorAll('.asset').forEach(el => el.onclick = () => go('detalle', el.dataset.id));
 
     let total = 0, invested = 0, plSum = 0, fxSum = 0, missing = 0;
-    const vals = {};
+    const vals = {}, quick = {};
     const alerts = [];
     const fg = { stocks: await fearGreedStocks().catch(() => null), crypto: await fearGreedCrypto().catch(() => null) };
     await Promise.all(assets.map(async a => {
@@ -361,6 +361,7 @@
         const ch = d.meta.prev ? sn.price / d.meta.prev - 1 : null;
         const ev = A.evaluate(d, { fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules });
         const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
+        quick[a.id] = sn;
         const chEl = $('#ch-' + a.id);
         $('#sub-' + a.id).textContent = `${a.type} · ${num(sn.price * sn.fx, 2)} €`;
         if (sn.pos.qty > 0) {
@@ -384,6 +385,17 @@
       }
     }));
     if (current.name !== 'cartera') return;
+    // Señales fuertes en cada fila, con el análisis completo (lo mismo que usa Oportunidades). Va en segundo plano.
+    Promise.all(Object.values(quick).map(async sn => {
+      const a = sn.a, extra = await gatherExtra(a, sn.d).catch(() => ({ fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules }));
+      const ev = A.evaluate(sn.d, extra), b = A.bucketOf(ev.score), el = $('#sg-' + a.id);
+      if (!el || current.name !== 'cartera') return;
+      const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
+      // Solo las señales fuertes (Comprar / Reducir): la flecha ocupa el sitio del punto de color.
+      const M = { buy: ['buy', '▲', 'Señal fuerte de compra'], sell: ['sell', '▼', 'Señal fuerte de venta'] }[b];
+      if (M) { el.className = 'sigb ' + M[0]; el.textContent = M[1]; el.title = M[2] + ': ' + ev.label; el.hidden = false; if (dot) dot.hidden = true; }
+      else { el.hidden = true; if (dot) dot.hidden = false; }
+    })).catch(() => {});
     // Ordenar por valor actual (lo que sacarías vendiendo hoy), de mayor a menor; se recuerda para la próxima vez.
     save('lastValues', Object.assign(load('lastValues', {}), vals));
     byValue(assets).forEach(a => { const el = list.querySelector(`[data-id="${CSS.escape(a.id)}"]`); if (el) list.appendChild(el); });
