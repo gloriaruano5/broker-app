@@ -143,3 +143,11 @@ label { font-size: 13px; color: var(--muted); }
 .sigb.sell{color:var(--down)}
 .prow .dot:not(.g):not(.r):not(.y){background:transparent;border:2px solid var(--muted);opacity:.6;animation:dotp 1.2s ease-in-out infinite}
 @keyframes dotp{50%{opacity:.2}}
+.tc-row{padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.tc-row:last-of-type{border-bottom:0}
+.tc-bars{display:grid;grid-template-columns:1fr 1fr;gap:2px;margin:5px 0 3px;height:12px}
+.tc-neg,.tc-pos{background:var(--card2);border-radius:6px;overflow:hidden;display:flex}
+.tc-neg{justify-content:flex-end}
+.tc-neg div{background:var(--down);opacity:.75;height:100%;border-radius:6px 0 0 6px}
+.tc-pos div{background:var(--up);height:100%;border-radius:0 6px 6px 0}
+.badge.up{color:var(--up)} .badge.warn{color:var(--warn)} .badge.down{color:var(--down)}

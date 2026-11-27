@@ -1388,12 +1388,14 @@
   /** Precio de entrada y hasta dónde podría llegar: rango de 8 de cada 10 casos según lo que se mueve el activo y, si hay historial, lo que pasó tras esta misma señal. */
   /** Con qué frecuencia terminó más alto que al empezar, a 1, 3 y 12 meses, en los últimos ~10 años de este activo (datos mensuales). */
   async function upProbs(sym) {
-    return cached('pu:' + sym, 720, async () => {
+    return cached('pu2:' + sym, 720, async () => {
       const d = await yahoo(sym, '10y', '1mo');
       const c = (d.c || []).filter(x => x > 0);
       if (c.length < 24) return null;
       const f = h => { let up = 0, n = 0; for (let i = 0; i + h < c.length; i++) { n++; if (c[i + h] > c[i]) up++; } return n >= 12 ? { up: up / n, n } : null; };
-      return { m1: f(1), m3: f(3), y1: f(12), yrs: Math.round(c.length / 12) };
+      const r12 = []; for (let i = 0; i + 12 < c.length; i++) r12.push(c[i + 12] / c[i] - 1);
+      r12.sort((x, y) => x - y);
+      return { m1: f(1), m3: f(3), y1: f(12), yrs: Math.round(c.length / 12), y1med: r12.length >= 12 ? r12[Math.floor(r12.length / 2)] : null };
     });
   }
   function targetBlock(pxEur, limit, bt, b, pr) {
@@ -1555,6 +1557,33 @@
     const wk = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), td = new Date().toISOString().slice(0, 10);
     const soon = (await keyEvents().catch(() => [])).filter(e => e.impact === 'alto' && e.date >= td && e.date <= wk);
     if (current.name !== 'oportunidades') return;
+    // Gráfico resumen: potencial a 12 meses frente a fiabilidad y riesgo, ordenado por el balance entre ganancia y riesgo.
+    const topChart = (() => {
+      const seenC = new Set(clear.map(r => r.w.yahoo));
+      const items = [...clear, ...balance.filter(r => !seenC.has(r.a.yahoo)).map(asSig)].map(r => {
+        const pr = prob[r.w.yahoo], ys = r.extra && r.extra.summary, pxN = r.fx ? r.pxEur / r.fx : null;
+        const an = ys && ys.targetPrice && pxN ? ys.targetPrice / pxN - 1 : null;
+        const pot = an != null ? an : pr && pr.y1med != null ? pr.y1med : null;
+        if (pot == null) return null;
+        const pUp = pr && pr.y1 ? pr.y1.up : null;
+        const sd = r.limit > 0 && r.pxEur > 0 ? -Math.log(r.limit / r.pxEur) / (0.7 * Math.sqrt(5)) : (r.sdD || 0);
+        const vol = sd * Math.sqrt(252), down = Math.exp(-1.45 * sd * Math.sqrt(252)) - 1; // caída «mala» a 12 meses (1 de cada 10)
+        const p = pUp != null ? pUp : 0.5;
+        const bal = p * pot + (1 - p) * down * 0.5; // balance orientativo entre lo que puede ganar y lo que puede perder
+        return { r, pot, src: an != null ? 'analistas' : 'historial', pUp, vol, down, bal, risk: vol < 0.25 ? ['bajo', 'up'] : vol < 0.45 ? ['medio', 'warn'] : ['alto', 'down'] };
+      }).filter(Boolean).sort((x, y) => y.bal - x.bal).slice(0, 8);
+      if (!items.length) return '';
+      const mx = Math.max(0.05, ...items.map(x => Math.abs(x.pot)), ...items.map(x => Math.abs(x.down)));
+      const w = v => Math.min(100, Math.abs(v) / mx * 100).toFixed(1);
+      return `<div class="card"><h2>🏆 Mejores oportunidades de un vistazo</h2>
+        <div class="small muted" style="margin-bottom:8px">Las señales claras de compra y las de equilibrar tu cartera, ordenadas por el balance entre lo que podrían ganar y lo que podrían perder en 12 meses. Barra verde: subida posible (objetivo de los analistas o, si no hay, lo habitual en su historial). Barra roja: caída en un año malo (1 de cada 10). Toca una para ver su ficha.</div>
+        ${items.map((x, i) => `<div class="tc-row" data-open="${esc(x.r.ownId || '')}" data-sym="${esc(x.r.w.yahoo)}" data-nm="${esc(x.r.w.name)}">
+          <div class="row small"><b class="grow">${i + 1}. ${esc(x.r.w.name)}</b><span class="badge ${x.risk[1]}">riesgo ${x.risk[0]}</span></div>
+          <div class="tc-bars"><div class="tc-neg"><div style="width:${w(x.down)}%"></div></div><div class="tc-pos"><div style="width:${w(x.pot)}%"></div></div></div>
+          <div class="row small"><span class="down">${pctS(x.down)}</span><span class="grow muted" style="text-align:center">${x.pUp != null ? `sube 1 año: <b>${Math.round(x.pUp * 100)}%</b> de las veces` : 'fiabilidad sin medir'}</span><b class="${x.pot >= 0 ? 'up' : 'down'}">${pctS(x.pot)}</b></div>
+          <div class="small muted" style="font-size:11px">Subida según ${x.src} · balance ${pctS(x.bal)}</div></div>`).join('')}
+        <div class="small muted" style="margin-top:6px">La subida de los analistas suele ser optimista y el pasado no garantiza nada. Una barra verde larga con riesgo alto y poca probabilidad no es mejor que una corta y segura: por eso el orden usa el balance.</div></div>`;
+    })();
     const sellCard = r => {
       const pl = r.sn.plEur;
       return `<div class="opp" data-open="${esc(r.a.id)}"><div class="row"><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
@@ -1566,6 +1595,7 @@
         <div class="small muted" style="margin-top:4px">${histText(r.bt, r.b)}${pl != null ? (pl > 0 ? ' Si vendes, pagarás impuestos por la ganancia.' : ' Si vendes con pérdidas, puedes restarlas de tus ganancias del año (ojo con la regla de los 2 meses si vuelves a comprar).') : ''}</div></div>`;
     };
     view.innerHTML = `${soon.length ? `<div class="card signal y"><b>⚠️ Esta semana: ${soon.map(e => `${esc(e.title)} (${new Date(e.date + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric' })})`).join(' · ')}</b><div class="small" style="margin-top:4px">Si vas a comprar, plantéate esperar a conocer el resultado: evita entrar justo antes de un salto. Más detalle en la Agenda.</div></div>` : ''}
+      ${topChart}
       <div class="card small muted">🔔 Con «Avísame…» te llega una notificación cuando el precio llegue a la entrada recomendada o si cae fuerte. Los gestionas en Ajustes &gt; Notificaciones.</div>
       <div class="card"><h2>⚖️ Para equilibrar tu cartera</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
         <div class="small muted" style="margin-bottom:6px">Activos tuyos que se han quedado por debajo del reparto propuesto. Completar el reparto con dinero nuevo es lo que mejor ha funcionado en la prueba histórica, aunque la señal no sea de compra clara. El precio de entrada es una bajada normal de una semana: se alcanza más o menos la mitad de las veces.</div>
@@ -1588,6 +1618,10 @@
       else openExternal({ name: el.dataset.nm, yahoo: el.dataset.sym });
     });
     bindPa(view);
+    view.querySelectorAll('.tc-row').forEach(el => el.onclick = () => {
+      if (el.dataset.open) { go('detalle', el.dataset.open); current.tab = 'grafica'; render(); }
+      else openExternal({ name: el.dataset.nm, yahoo: el.dataset.sym });
+    });
     view.querySelectorAll('[data-wdel]').forEach(b => b.onclick = e => { e.stopPropagation(); settings.watch = (settings.watch || []).filter(x => x.yahoo !== b.dataset.wdel); save('settings', settings); renderOpps(); });
     let tm; $('#wq').oninput = () => { clearTimeout(tm); tm = setTimeout(async () => {
       const q = $('#wq').value.trim(); if (q.length < 2) { $('#wres').innerHTML = ''; return; }
