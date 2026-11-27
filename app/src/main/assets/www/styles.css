@@ -126,3 +126,7 @@ label { font-size: 13px; color: var(--muted); }
 .kv3 b { font-size: 13px; }
 .opp[data-open] { cursor: pointer; }
 .opp[data-open]:active { filter: brightness(1.08); }
+.factors { margin-top: 8px; }
+.factors ul { margin: 2px 0 6px; padding-left: 18px; }
+.factors li { margin: 2px 0; }
+.factors .off { opacity: .55; }
