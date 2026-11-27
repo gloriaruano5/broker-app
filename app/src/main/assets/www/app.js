@@ -1253,7 +1253,17 @@
   // por debajo del reparto propuesto (rebalancear con dinero nuevo) sí mejoró el resultado y redujo caídas.
   // Por eso la lista combina: hueco en el reparto (lo que más pesa), la señal de la app y si la señal ha funcionado antes en ese activo.
   /** Precio de entrada y hasta dónde podría llegar: rango de 8 de cada 10 casos según lo que se mueve el activo y, si hay historial, lo que pasó tras esta misma señal. */
-  function targetBlock(pxEur, limit, bt, b) {
+  /** Con qué frecuencia terminó más alto que al empezar, a 1, 3 y 12 meses, en los últimos ~10 años de este activo (datos mensuales). */
+  async function upProbs(sym) {
+    return cached('pu:' + sym, 720, async () => {
+      const d = await yahoo(sym, '10y', '1mo');
+      const c = (d.c || []).filter(x => x > 0);
+      if (c.length < 24) return null;
+      const f = h => { let up = 0, n = 0; for (let i = 0; i + h < c.length; i++) { n++; if (c[i + h] > c[i]) up++; } return n >= 12 ? { up: up / n, n } : null; };
+      return { m1: f(1), m3: f(3), y1: f(12), yrs: Math.round(c.length / 12) };
+    });
+  }
+  function targetBlock(pxEur, limit, bt, b, pr) {
     const sd = limit > 0 && pxEur > 0 ? -Math.log(limit / pxEur) / (0.7 * Math.sqrt(5)) : 0;
     if (!(sd > 0)) return '';
     // A 12 meses se amplía la campana (z 1,45), como en el resto de la app: la prueba histórica dio menos aciertos con 1,28.
@@ -1262,9 +1272,15 @@
     const s = bt && bt.byBucket && bt.byBucket[b];
     const hist = s && s.n >= 8 && (s.indep || 0) >= 4 && s.p25 != null
       ? `<div class="small muted" style="margin-top:4px">Tras esta misma señal en este activo, a 3 meses lo habitual fue entre <b>${pctS(s.p25)}</b> y <b>${pctS(s.p75)}</b> (la mitad de las veces, más de ${pctS(s.med)}): entre ${num(pxEur * (1 + s.p25), 2)} € y ${num(pxEur * (1 + s.p75), 2)} €.</div>` : '';
-    const cell = (t, l, h) => `<div><span>${t}</span><b class="up" style="display:block">↑ ${num(h, 2)} €</b><b class="down" style="display:block">↓ ${num(l, 2)} €</b></div>`;
+    // Probabilidad de terminar más alto / más bajo que hoy. A 3 meses, si hay casos suficientes, se usa la de esta misma señal.
+    const sig = s && s.n >= 8 && (s.indep || 0) >= 4 && s.up != null ? s.up : null;
+    const P = { m1: pr && pr.m1 && pr.m1.up, m3: sig != null ? sig : pr && pr.m3 && pr.m3.up, y1: pr && pr.y1 && pr.y1.up };
+    const pp = (x, mark) => x == null ? '' : ` <small class="pp">${Math.round(x * 100)}%${mark ? '*' : ''}</small>`;
+    const cell = (t, l, h, x, mark) => `<div><span>${t}</span><b class="up" style="display:block">↑ ${num(h, 2)} €${pp(x, mark)}</b><b class="down" style="display:block">↓ ${num(l, 2)} €${pp(x == null ? null : 1 - x)}</b></div>`;
+    const anyP = P.m1 != null || P.m3 != null || P.y1 != null;
+    const pNote = anyP ? `<div class="small muted" style="margin-top:4px">El % es la probabilidad de acabar por encima (↑) o por debajo (↓) del precio de hoy: cuántas veces pasó${pr ? ` en los últimos ${pr.yrs} años de este activo` : ''}${sig != null ? '; *a 3 meses, cuántas veces tras esta misma señal' : ''}. Es lo que pasó antes, no una garantía.</div>` : '';
     return `<div class="target"><div class="small"><b>Hasta dónde podría llegar</b> (8 de cada 10 veces; puede subir o bajar):</div>
-      <div class="kv kv3" style="margin-top:4px">${cell('En 1 mes', l1, h1)}${cell('En 3 meses', l3, h3)}${cell('En 1 año', l12, h12)}</div>${hist}
+      <div class="kv kv3" style="margin-top:4px">${cell('En 1 mes', l1, h1, P.m1)}${cell('En 3 meses', l3, h3, P.m3, sig != null)}${cell('En 1 año', l12, h12, P.y1)}</div>${pNote}${hist}
       <div class="small muted" style="margin-top:4px">A largo plazo el rango es muy ancho: lo que acabe pasando depende sobre todo de cómo le vaya al negocio (o al mercado, en un ETF), no de la señal de hoy.</div></div>`;
   }
   /** Qué empuja a favor y en contra, y qué tipos de datos se han podido revisar. */
@@ -1294,7 +1310,7 @@
       <div class="small muted">${esc(r.w.tag)} · ${esc(r.w.yahoo)}${r.y1 != null ? ` · último año <span class="${cls(r.y1)}">${pctS(r.y1)}</span>` : ''}</div>
       <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>${evWarn(r.earn)}
       ${paHtml({ sym: r.w.yahoo, name: r.w.name, id: r.ownId, pxEur: r.pxEur, fx: r.fx, limit: r.limit })}
-      ${targetBlock(r.pxEur, r.limit, r.bt, r.b)}
+      ${targetBlock(r.pxEur, r.limit, r.bt, r.b, r.pr)}
       <div class="small" style="margin-top:4px">Señal: <b class="${r.score > 0 ? 'up' : r.score < 0 ? 'down' : ''}">${strength(r.score)}</b> · «${esc(r.label)}»${r.night ? ' (revisión de anoche, precio en dólares pasado a euros)' : ''}.</div>
       ${factorsHtml(r.ev, r.extra)}
       <div class="small muted" style="margin-top:2px">${r.hist || 'Acierto histórico: no medido para este activo.'}</div></div>`;
@@ -1387,17 +1403,17 @@
         <div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
         <div class="small" style="margin-top:6px">${when}</div>${evWarn(earn[r.a.yahoo])}
         ${paHtml({ sym: r.a.yahoo, name: r.a.name, id: r.a.id, pxEur: r.pxEur, fx: r.sn.fx, limit: r.limit })}
-        ${targetBlock(r.pxEur, r.limit, r.bt, r.b)}
+        ${targetBlock(r.pxEur, r.limit, r.bt, r.b, prob[r.a.yahoo])}
         <div class="small muted" style="margin-top:4px">Señal de la app: «${esc(r.ev.label)}».</div>${factorsHtml(r.ev, r.extra)}</div>`;
     };
     // Resultados en los próximos 14 días (para no entrar justo antes) y eventos de impacto alto de esta semana.
-    const earn = {};
+    const earn = {}, prob = {};
     const shown = [...balance.map(r => r.a.yahoo), ...clear.map(r => r.w.yahoo), ...own.filter(Boolean).map(r => r.w.yahoo)];
-    await Promise.all([...new Set(shown)].filter(sym => !/-USD$|=F$|=X$|^\^/.test(sym)).map(async sym => {
+    await Promise.all([...[...new Set(shown)].filter(sym => !/-USD$|=F$|=X$|^\^/.test(sym)).map(async sym => {
       const ys = await yahooSummary(sym).catch(() => null);
       const t = ys && (ys.earnings || []).find(x => x * 1000 > Date.now() - 86400000);
       if (t) earn[sym] = new Date(t * 1000).toISOString().slice(0, 10);
-    }));
+    }), ...[...new Set(shown)].map(async sym => { prob[sym] = await upProbs(sym).catch(() => null); })]);
     const wk = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), td = new Date().toISOString().slice(0, 10);
     const soon = (await keyEvents().catch(() => [])).filter(e => e.impact === 'alto' && e.date >= td && e.date <= wk);
     if (current.name !== 'oportunidades') return;
@@ -1418,13 +1434,13 @@
         ${balance.length ? balance.map(card).join('') : '<div class="muted small">Tu cartera está cerca del reparto propuesto: no hace falta equilibrar.</div>'}</div>
       <div class="card"><h2>📈 Señales claras de compra</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
         <div class="small muted" style="margin-bottom:6px">Las de señal más favorable, estén o no en tu cartera y sin mirar su peso. Revisados tus activos y ${num(watchN, 0)} más: ${(window.WATCHLIST || []).length} en el móvil (ETFs, grandes de EE. UU., Euro Stoxx 50 e IBEX 35)${scan ? ` y ${scan.scanned} del S&P 500 y Nasdaq 100 cada noche (último: ${esc(scan.date)})` : ''}. Se ordenan buscando la mayor rentabilidad con el menor riesgo: a señal parecida, va antes el que menos oscila. Primero se filtran por precio y tendencia, y los 14 mejores se analizan a fondo con noticias, analistas, cuentas y mercado. Para los que no tienes no hay datos oficiales de directivos ni de grandes fondos (solo se descargan de la SEC para tus activos). Aun así, nada garantiza que suba: si compras algo nuevo, empieza con poco (un 2-3% de tu cartera).</div>
-        ${clear.length ? clear.map((r, i) => oppOut(Object.assign(r, { earn: earn[r.w.yahoo] }), i)).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
+        ${clear.length ? clear.map((r, i) => oppOut(Object.assign(r, { earn: earn[r.w.yahoo], pr: prob[r.w.yahoo] }), i)).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
       <div class="card"><h2>📉 Para vender o reducir</h2>
         <div class="small muted" style="margin-bottom:6px">Tus activos con señal de precaución o de reducir. Nadie sabe con seguridad si algo va a bajar: por eso ves la fuerza de la señal y cuánto ha acertado antes en ese mismo activo.</div>
         ${sells.length ? sells.map(sellCard).join('') : '<div class="muted small">Ninguno de tus activos tiene hoy señal de vender.</div>'}
         ${heavy.length ? `<div class="small" style="margin-top:8px"><b>Pesan de más</b> (señal normal, pero por encima del reparto): ${heavy.map(r => `${esc(r.a.name)} ${num(r.g.cw * 100, 1)}% (propuesto ${num(r.g.tw * 100, 1)}%)`).join(', ')}. Lo más sencillo es no comprar más de estos y equilibrar con tus aportaciones.</div>` : ''}</div>
       <div class="card" id="ownCard"><h2>⭐ Tu lista</h2><div class="small muted" style="margin-bottom:6px">Activos que quieres vigilar aunque no los tengas. Aquí salen siempre, con la señal que tengan.</div>
-        ${own.map((r, i) => r ? oppOut(Object.assign(r, { earn: earn[r.w.yahoo] }), i, settings.watch[i].yahoo) : `<div class="reason small">${esc(settings.watch[i].name)}: sin datos ahora <button class="icon" data-wdel="${esc(settings.watch[i].yahoo)}">✕</button></div>`).join('') || '<div class="muted small">Aún no has añadido ninguno.</div>'}
+        ${own.map((r, i) => r ? oppOut(Object.assign(r, { earn: earn[r.w.yahoo], pr: prob[r.w.yahoo] }), i, settings.watch[i].yahoo) : `<div class="reason small">${esc(settings.watch[i].name)}: sin datos ahora <button class="icon" data-wdel="${esc(settings.watch[i].yahoo)}">✕</button></div>`).join('') || '<div class="muted small">Aún no has añadido ninguno.</div>'}
         <input id="wq" placeholder="Añadir: busca por nombre o ticker (ej. Coca-Cola, KO)" style="margin-top:8px"><div id="wres"></div></div>
       <div class="card small muted">Fear & Greed: bolsa ${fg.stocks ? Math.round(fg.stocks.score) : '–'}, cripto ${fg.crypto ? Math.round(fg.crypto.score) : '–'}. Los precios en euros son al cambio de hoy; en Trade Republic el precio puede variar un poco según la bolsa. ${monthly ? `Las cantidades parten de tu aportación de ${eur(monthly)} al mes (Riesgo).` : 'Si pones tu aportación mensual en Riesgo > Reparto propuesto, las cantidades se ajustan a ella.'}</div>
       <div class="disclaimer">Lista orientativa generada automáticamente, no es asesoramiento financiero. Nadie sabe si un precio va a subir o bajar: la prueba histórica muestra que la app acierta la dirección poco más que el azar, y que lo que más ayuda es repartir bien y comprar de forma regular. Decide tú y no inviertas dinero que puedas necesitar.</div>`;

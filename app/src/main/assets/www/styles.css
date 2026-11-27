@@ -133,3 +133,6 @@ label { font-size: 13px; color: var(--muted); }
 .pa{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .pa .btn{font-size:13px;padding:6px 10px;margin:0;width:auto;flex:0 1 auto}
 .pa .btn.pa-on{border-color:var(--accent)}
+.pp{font-size:11px;font-weight:600;opacity:.85}
+.kv3 b{white-space:nowrap}
+.kv3{column-gap:6px}
