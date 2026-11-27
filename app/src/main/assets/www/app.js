@@ -438,6 +438,102 @@
     return { rows, total, test, mode };
   }
 
+  // ---------- Planes de inversión (Trade Republic) ----------
+  const plans = () => settings.plans || (settings.plans = []);
+  const planTotal = () => plans().reduce((x, p) => x + (+p.eur || 0), 0);
+  const isoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  /** Fechas en que se ejecuta un plan mensual entre dos días (sin incluir el primero). */
+  function execDates(p, fromISO, toISO) {
+    const out = []; const f = new Date(fromISO + 'T12:00:00');
+    for (let k = 0; k < 36; k++) {
+      const y = f.getFullYear(), m = f.getMonth() + k, last = new Date(y, m + 1, 0).getDate();
+      const iso = isoDay(new Date(y, m, Math.min(+p.day || 1, last), 12));
+      if (iso > toISO) break; if (iso > fromISO) out.push(iso);
+    }
+    return out;
+  }
+  function nextExec(p) { const t = isoDay(new Date()); return execDates(p, isoDay(new Date(Date.now() - 86400000)), isoDay(new Date(Date.now() + 40 * 86400000)))[0] || t; }
+  /** Suma a cada posición las compras de los planes que ya se han ejecutado, con el precio de cierre de ese día (aproximado). */
+  async function applyPlans() {
+    const today = isoDay(new Date()); let n = 0;
+    for (const p of plans()) {
+      const a = assets.find(x => x.id === p.id); if (!a || !(p.eur > 0) || !p.since) continue;
+      p.done = p.done || [];
+      for (const dt of execDates(p, p.since, today)) {
+        if (p.done.includes(dt)) continue;
+        const d = await daily(a).catch(() => null); if (!d) break;
+        const i = d.t.findIndex(t => isoDay(new Date(t * 1000)) >= dt); if (i < 0) break; // aún no hay precio de ese día
+        const fx = await fxToEur(d.meta.currency).catch(() => null); if (!fx) break;
+        const px = d.c[i], q = p.eur / (px * fx);
+        if (a.ops && a.ops.length) a.ops.push({ type: 'compra', date: dt, qty: q, price: px, eur: p.eur, plan: true });
+        else { a.qty = (a.qty || 0) + q; if (a.costEur != null) a.costEur += p.eur; if (a.avgEur) a.avgEur = a.costEur / a.qty; }
+        a.planBuys = (a.planBuys || 0) + 1;
+        p.done.push(dt); n++;
+      }
+    }
+    if (n) { persist(); save('settings', settings); clearCache(); toast(`Añadidas ${n} compra(s) de tus planes de inversión (precio aproximado de ese día)`); if (current.name === 'cartera') render(); }
+    return n;
+  }
+  /** Propuesta de importes para los planes: completar el reparto en unos 12 meses, sin meter dinero nuevo en lo que tiene señal de precaución. */
+  async function planProposal(snaps) {
+    const M = planTotal(); const plan = riskPlan(snaps); if (!plan || !(M > 0)) return null;
+    const sig = {};
+    await Promise.all(snaps.filter(s => s.value > 0 || plans().some(p => p.id === s.a.id)).map(async s => {
+      const extra = await gatherExtra(s.a, s.d).catch(() => ({}));
+      const ev = A.evaluate(s.d, extra); sig[s.a.id] = { b: A.bucketOf(ev.score), label: ev.label, kind: ev.kind };
+    }));
+    // Se respetan los activos que elegiste: el mismo dinero se reparte entre tus planes, más a los que están más lejos de su peso.
+    // Cada uno recibe en proporción a objetivo / peso actual (tope 3 veces). «Precaución»: la mitad. «Reducir»: nada.
+    const mineIds = new Set(plans().map(p => p.id));
+    const wt = {};
+    plan.rows.forEach(r => { if (!mineIds.has(r.id)) return; const b = sig[r.id] && sig[r.id].b; if (b === 'sell') return;
+      wt[r.id] = Math.min(3, r.tw / Math.max(r.cw, 0.005)) * (b === 'caut' ? 0.5 : 1); });
+    plans().forEach(p => { if (!(p.id in wt) && !plan.rows.some(r => r.id === p.id)) wt[p.id] = 1; }); // sin cantidad aún: peso normal
+    const ws = Object.values(wt).reduce((x, y) => x + y, 0) || 1;
+    const prop = {}; Object.entries(wt).forEach(([id, w]) => prop[id] = Math.max(15, Math.round(w / ws * M / 5) * 5));
+    const topId = Object.keys(wt).sort((x, y) => wt[y] - wt[x])[0];
+    if (topId) prop[topId] += M - Object.values(prop).reduce((x, y) => x + y, 0);
+    // Fuera de tus planes: los que más lejos están de su peso y no tienen señal de precaución.
+    const extra = plan.rows.filter(r => !mineIds.has(r.id) && sig[r.id] && sig[r.id].b !== 'caut' && sig[r.id].b !== 'sell' && r.tw - r.cw > 0.015)
+      .sort((x, y) => (y.tw - y.cw) - (x.tw - x.cw)).slice(0, 3).map(r => ({ name: (assets.find(a => a.id === r.id) || {}).name || r.id, cw: r.cw, tw: r.tw, label: sig[r.id].label }));
+    const ids = [...new Set([...plans().map(p => p.id), ...Object.keys(prop).filter(k => prop[k] > 0)])];
+    const rows = ids.map(id => { const p = plans().find(x => x.id === id), r = plan.rows.find(x => x.id === id);
+      return { id, name: (assets.find(a => a.id === id) || {}).name || id, now: p ? +p.eur : 0, prop: prop[id] || 0, sig: sig[id], cw: r ? r.cw : 0, tw: r ? r.tw : 0 }; })
+      .sort((x, y) => y.prop - x.prop || y.now - x.now);
+    return { M, rows, extra };
+  }
+  function plansCardHtml(pp) {
+    const L = plans(), held = assets.filter(a => { try { return window.Portfolio.position(a).qty > 0; } catch (e) { return false; } });
+    const why = r => r.sig && r.sig.b === 'sell' ? `pausar: la app dice «${r.sig.label}»` : r.sig && r.sig.b === 'caut' && r.prop < r.now ? `menos: la app dice «${r.sig.label}»` : r.prop > r.now ? (r.cw > r.tw ? `recibe lo que dejan los que bajan (pesa ${num(r.cw * 100, 1)}%, objetivo ${num(r.tw * 100, 1)}%)` : `pesa ${num(r.cw * 100, 1)}%, objetivo ${num(r.tw * 100, 1)}%`) : r.prop < r.now ? (`ya pesa ${num(r.cw * 100, 1)}% (objetivo ${num(r.tw * 100, 1)}%)`) : 'igual';
+    return `<h2>📅 Tus planes de inversión</h2>
+      ${L.length ? L.map((p, i) => `<div class="reason row small"><span class="grow"><b>${esc((assets.find(a => a.id === p.id) || {}).name || p.id)}</b>: ${eur(+p.eur)} el día ${p.day} de cada mes · próxima ${new Date(nextExec(p) + "T12:00:00").toLocaleDateString("es-ES", { day: "numeric", month: "short" })}${p.done && p.done.length ? ` · ${p.done.length} ya sumada(s)` : ''}</span><button class="icon" data-pldel="${i}">✕</button></div>`).join('') : '<div class="small muted">Aún no has apuntado ninguno.</div>'}
+      <details style="margin-top:6px"><summary style="color:var(--accent)">Añadir un plan</summary>
+        <select id="plA">${held.concat(assets.filter(a => !held.includes(a))).map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}</select>
+        <div class="row" style="gap:8px"><input id="plE" type="number" inputmode="decimal" min="1" step="5" placeholder="€ al mes"><select id="plD">${[1, 2, 15, 16].map(d => `<option value="${d}">Día ${d}</option>`).join('')}</select><button class="btn sec" id="plAdd" style="width:auto">Añadir</button></div></details>
+      ${pp ? `<h3 style="margin-top:12px">Importes propuestos (${eur(pp.M)} al mes en total)</h3>
+        <div class="small muted" style="margin-bottom:6px">Los mismos activos y el mismo dinero al mes, repartido para acercarte al reparto propuesto en un año más o menos: más a lo que pesa poco y menos a lo que ya pesa de más o la app ve con precaución (mirando gráfica, noticias, cuentas, analistas y mercado).</div>
+        ${pp.rows.map(r => `<div class="reason"><div class="row"><b class="grow">${esc(r.name)}</b><span>${r.now ? eur(r.now) : 'nuevo'} → <b class="${r.prop > r.now ? 'up' : r.prop < r.now ? 'down' : ''}">${r.prop ? eur(r.prop) : 'pausar'}</b></span></div><div class="small muted">${esc(why(r))}</div></div>`).join('')}
+        ${pp.extra.length ? `<div class="small" style="margin-top:8px"><b>Fuera de tus planes</b>, los que más lejos están de su peso: ${pp.extra.map(x => `${esc(x.name)} (pesa ${num(x.cw * 100, 1)}%, objetivo ${num(x.tw * 100, 1)}%, «${esc(x.label)}»)`).join('; ')}. Si quieres, podrías abrir un plan en alguno y bajar los que ya pesan de más.</div>` : ''}
+        <div class="btns"><button class="btn sec" id="plApply">Ya los he cambiado en Trade Republic</button></div>
+        <div class="small muted">La app no cambia nada en Trade Republic: los cambios los haces tú allí. Pulsa el botón cuando lo hayas hecho y la app usará los nuevos importes.</div>` : L.length ? '<div class="small muted" style="margin-top:6px">Para proponer importes hacen falta al menos 3 activos con cantidad.</div>' : ''}
+      <div class="small muted" style="margin-top:6px">Cada vez que se ejecuta un plan, la app suma la compra a tu posición con el precio de cierre de ese día (puede variar un poco del real). Si vuelves a cargar tus posiciones exactas, no se duplica. Orientativo, no es asesoramiento financiero.</div>`;
+  }
+  async function loadPlans(snaps) {
+    const box = $('#plansCard'); if (!box) return;
+    box.innerHTML = plansCardHtml(null) + '<div class="small muted">Calculando importes propuestos…</div>';
+    const pp = await planProposal(snaps).catch(() => null);
+    if (current.name !== 'riesgo' || !$('#plansCard')) return;
+    box.innerHTML = plansCardHtml(pp);
+    box.querySelectorAll('[data-pldel]').forEach(b => b.onclick = () => { plans().splice(+b.dataset.pldel, 1); save('settings', settings); loadPlans(snaps); });
+    $('#plAdd').onclick = () => { const e = +$('#plE').value; if (!(e > 0)) { toast('Pon el importe al mes'); return; }
+      plans().push({ id: $('#plA').value, eur: e, day: +$('#plD').value, since: isoDay(new Date()) }); save('settings', settings); loadPlans(snaps); };
+    if ($('#plApply')) $('#plApply').onclick = () => {
+      const today = isoDay(new Date()), day0 = (plans()[0] || {}).day || 2;
+      settings.plans = pp.rows.filter(r => r.prop > 0).map(r => { const old = plans().find(p => p.id === r.id); return old ? Object.assign(old, { eur: r.prop }) : { id: r.id, eur: r.prop, day: day0, since: today }; });
+      save('settings', settings); toast('Planes actualizados en la app'); loadPlans(snaps);
+    };
+  }
+
   // ---------- Comprobación automática de datos (en el móvil, que sí accede a los precios) ----------
   let checking = null;
   const CHECK_V = 2;
@@ -983,9 +1079,10 @@
         ${plan.rows.map(r => `<tr><td>${esc(r.name)}${r.out ? ' <span class="warn">●</span>' : ''}</td><td>${num(r.cw * 100, 1)}%</td><td>${num(r.tw * 100, 1)}%</td><td class="${r.out ? (r.diff > 0 ? 'up' : 'down') : 'muted'}">${r.out ? (r.diff > 0 ? '+' : '') + eur(r.eur) : '–'}</td></tr>`).join('')}
         </table></div>
         <h3>Plan de aportación del mes</h3>
-        <div class="row" style="gap:8px;align-items:center"><input id="contrib" type="number" inputmode="decimal" min="0" step="10" style="max-width:130px" value="${settings.monthly || ''}" placeholder="€ este mes"><button class="btn sec" id="contribBtn">Calcular</button></div>
+        <div class="row" style="gap:8px;align-items:center"><input id="contrib" type="number" inputmode="decimal" min="0" step="10" style="max-width:130px" value="${settings.monthly || planTotal() || ''}" placeholder="€ este mes"><button class="btn sec" id="contribBtn">Calcular</button></div>
         <div id="contribOut" class="small" style="margin-top:6px"></div>
         <div class="small muted" style="margin-top:6px">Consejo: reequilibra sobre todo con el dinero nuevo que metas (comprando lo que está por debajo), porque vender con ganancias paga impuestos en España. ${plan.test ? esc(plan.test) : ''} No es asesoramiento financiero.</div></div>` : ''}
+      <div class="card" id="plansCard"></div>
       ${!held.length ? '<div class="card warn">Aún no has puesto cantidades: el reparto aparecerá cuando apuntes tus compras. El riesgo y la correlación se muestran igualmente.</div>' : ''}
       ${warns.length ? `<div class="card"><h2>Avisos de concentración</h2>${warns.map(w => `<div class="reason warn">${esc(w)}</div>`).join('')}</div>` : held.length ? '<div class="card"><h2>Concentración</h2><div class="small up">Sin concentraciones excesivas.</div></div>' : ''}
       ${held.length ? `<div class="card"><h2>Reparto por activo</h2>${bars(byAsset, eur)}</div>
@@ -1022,6 +1119,7 @@
     };
     if ($('#contribBtn')) { $('#contribBtn').onclick = showContrib; showContrib(); }
     loadCrisis(held, total);
+    loadPlans(snaps);
   }
 
   // ---------- Vista: Agenda ----------
@@ -1392,7 +1490,7 @@
     const clear = [...rows.filter(r => r.b === 'buy' || r.b === 'acc').map(asSig), ...outside].sort((x, y) => riskAdj(y) - riskAdj(x)).slice(0, 10);
     const sells = rows.filter(r => r.sn.pos.qty > 0 && (r.b === 'caut' || r.b === 'sell')).sort((x, y) => x.ev.score - y.ev.score);
     const heavy = rows.filter(r => r.g && r.g.out && r.diff < 0 && r.b !== 'caut' && r.b !== 'sell');
-    const monthly = +settings.monthly || 0;
+    const monthly = +settings.monthly || planTotal() || 0;
     const card = (r, i) => {
       const amt = r.g && r.diff > 0 ? Math.max(10, Math.round((monthly ? Math.min(monthly / 2, r.diff * plan.total) : r.diff * plan.total) / 10) * 10) : null;
       const when = r.b === 'buy' || r.b === 'acc'
@@ -1401,7 +1499,7 @@
       return `<div class="opp" data-open="${esc(r.a.id)}"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
         <div class="kv" style="margin-top:8px"><div><span>Pesa ahora / propuesto</span><b>${num(r.g.cw * 100, 1)}% → ${num(r.g.tw * 100, 1)}%</b></div>${amt ? `<div><span>Cuánto, orientativo</span><b>${eur(amt)}</b></div>` : ''}
         <div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
-        <div class="small" style="margin-top:6px">${when}</div>${evWarn(earn[r.a.yahoo])}
+        <div class="small" style="margin-top:6px">${when}</div>${(pl => pl ? `<div class="small" style="margin-top:4px">📅 Ya tienes un plan de ${eur(+pl.eur)} el día ${pl.day}: lo de arriba sería además del plan.</div>` : '')(plans().find(p => p.id === r.a.id))}${evWarn(earn[r.a.yahoo])}
         ${paHtml({ sym: r.a.yahoo, name: r.a.name, id: r.a.id, pxEur: r.pxEur, fx: r.sn.fx, limit: r.limit })}
         ${targetBlock(r.pxEur, r.limit, r.bt, r.b, prob[r.a.yahoo])}
         <div class="small muted" style="margin-top:4px">Señal de la app: «${esc(r.ev.label)}».</div>${factorsHtml(r.ev, r.extra)}</div>`;
@@ -1636,6 +1734,11 @@
         Object.entries(j.pos).forEach(([id, [q, avg]]) => { const a = assets.find(x => x.id === id); if (a) { a.qty = q; a.avgEur = avg; a.costEur = q * avg; a.cost = 0; a.ops = []; delete a.seed; a.seeded = j.date ? 'exacta ' + j.date : 'exacta'; n++; } });
         persist(); clearCache(); toast(`Cargadas ${n} posiciones`); stack.length = 0; current = { name: 'cartera' }; render(); return;
       }
+      if (j.plans && !j.assets) { // planes de inversión: {"plans":[["id", € al mes, día]], "date": "AAAA-MM-DD"}
+        const since = j.date || isoDay(new Date());
+        settings.plans = j.plans.filter(([id]) => assets.some(a => a.id === id)).map(([id, e, day]) => ({ id, eur: +e, day: +day, since }));
+        save('settings', settings); toast(`Cargados ${settings.plans.length} planes de inversión`); return;
+      }
       if (j.seed && !j.assets) { // formato corto: {"seed":{"id":[valor €, % desde la compra]}, "date": "..."}
         let n = 0;
         Object.entries(j.seed).forEach(([id, [v, pc]]) => { const a = assets.find(x => x.id === id); if (a) { a.seed = { valueEur: v, pct: pc / 100, date: j.date }; a.qty = 0; a.ops = []; n++; } });
@@ -1757,6 +1860,7 @@
   }
   window.openAsset = id => { if (assets.some(a => a.id === id)) { stack.length = 0; current = { name: 'cartera' }; go('detalle', id); } };
   setTimeout(() => refreshEvents(), 8000);
+  setTimeout(() => applyPlans().catch(() => {}), 4000);
   try { syncNotif(); if (window.NativeNotif && notifCfg().on && !settings.notifAsked) { settings.notifAsked = 1; save('settings', settings); window.NativeNotif.askPermission(); } } catch (e) {}
 
   render();
