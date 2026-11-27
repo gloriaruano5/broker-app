@@ -141,3 +141,5 @@ label { font-size: 13px; color: var(--muted); }
 .sigb[hidden]{display:none}
 .sigb.buy{color:var(--up)}
 .sigb.sell{color:var(--down)}
+.prow .dot:not(.g):not(.r):not(.y){background:transparent;border:2px solid var(--muted);opacity:.6;animation:dotp 1.2s ease-in-out infinite}
+@keyframes dotp{50%{opacity:.2}}

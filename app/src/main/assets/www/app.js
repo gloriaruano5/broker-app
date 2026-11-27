@@ -336,7 +336,7 @@
         <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button><button class="btn sec" id="jBtn">Diario de decisiones</button></div>
         <button class="btn" id="oppBtn" style="width:100%;margin-top:8px">🎯 Oportunidades de compra de hoy</button></div>
       <div class="card" id="alertsCard"><h2>Avisos</h2><div id="alerts" class="muted small">Analizando tus activos…</div></div>
-      <div class="card"><h2>Tus activos</h2><div id="list"></div><div class="small muted" style="margin-top:6px"><span class="sigb buy">💰</span> señal fuerte de compra · <span class="sigb sell">⚠️</span> señal fuerte de venta (en lugar del punto de color). Salen del análisis completo: gráfica, noticias, cuentas, analistas, directivos, grandes fondos y mercado. Orientativo.</div></div>
+      <div class="card"><h2>Tus activos</h2><div id="list"></div><div class="small muted" style="margin-top:6px"><span class="sigb buy">💰</span> señal fuerte de compra · <span class="sigb sell">⚠️</span> señal fuerte de venta (en lugar del punto de color). El punto es el mismo resultado que ves en la ficha; mientras parpadea, aún se está analizando. Salen del análisis completo: gráfica, noticias, cuentas, analistas, directivos, grandes fondos y mercado. Orientativo.</div></div>
       <div class="disclaimer">${DISCLAIMER}</div>`;
     $('#taxBtn').onclick = () => go('renta');
     $('#jBtn').onclick = () => go('diario');
@@ -351,7 +351,7 @@
     list.querySelectorAll('.asset').forEach(el => el.onclick = () => go('detalle', el.dataset.id));
 
     let total = 0, invested = 0, plSum = 0, fxSum = 0, missing = 0;
-    const vals = {}, quick = {};
+    const vals = {}, quick = {}, quickKind = {};
     const alerts = [];
     const fg = { stocks: await fearGreedStocks().catch(() => null), crypto: await fearGreedCrypto().catch(() => null) };
     await Promise.all(assets.map(async a => {
@@ -360,8 +360,8 @@
         const d = sn.d;
         const ch = d.meta.prev ? sn.price / d.meta.prev - 1 : null;
         const ev = A.evaluate(d, { fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules });
-        const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
-        quick[a.id] = sn;
+        // El color del punto solo se pone con el análisis completo (más abajo), para que coincida con la ficha.
+        quick[a.id] = sn; quickKind[a.id] = ev.kind;
         const chEl = $('#ch-' + a.id);
         $('#sub-' + a.id).textContent = `${a.type} · ${num(sn.price * sn.fx, 2)} €`;
         if (sn.pos.qty > 0) {
@@ -387,7 +387,8 @@
     if (current.name !== 'cartera') return;
     // Señales fuertes en cada fila, con el análisis completo (lo mismo que usa Oportunidades). Va en segundo plano.
     Promise.all(Object.values(quick).map(async sn => {
-      const a = sn.a, extra = await gatherExtra(a, sn.d).catch(() => ({ fearGreed: isCrypto(a) ? fg.crypto : fg.stocks, rules: a.rules }));
+      const a = sn.a, extra = await gatherExtra(a, sn.d).catch(() => null);
+      if (!extra) { const dt = $('#dot-' + a.id); if (dt) dt.className = 'dot ' + quickKind[a.id]; return; } // sin análisis completo: el de precio
       const ev = A.evaluate(sn.d, extra), b = A.bucketOf(ev.score), el = $('#sg-' + a.id);
       if (!el || current.name !== 'cartera') return;
       const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
@@ -757,14 +758,17 @@
     (await keyEvents()).filter(e => e.date >= today && e.date <= lim && eventAffects(e, a)).slice(0, 4)
       .forEach(e => watch.push(`${e.title} el ${new Date(e.date + 'T12:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}${e.approx ? ' (aprox.)' : ''}`));
     if (sc.levels.sma200) watch.push(`Si pierde o recupera ${num(sc.levels.sma200)} ${ccy} (media de 200 días)`);
-    const pos = (ev.bar + 1) / 2 * 100;
+    // La barra tiene 5 tramos iguales, los mismos que usa la app en todas partes (punto de color, Oportunidades, avisos):
+    // Reducir (≤ -2), Precaución (-2 a -0,75), Mantener, Acumular (0,75 a 2) y Comprar (≥ 2).
+    const pos = (sc0 => { const z = (lo, hi, a0) => a0 + 20 * Math.max(0, Math.min(1, (sc0 - lo) / (hi - lo)));
+      return sc0 <= -2 ? z(-4, -2, 0) : sc0 <= -0.75 ? z(-2, -0.75, 20) : sc0 < 0.75 ? z(-0.75, 0.75, 40) : sc0 < 2 ? z(0.75, 2, 60) : z(2, 4, 80); })(ev.score);
     const dots = { Alta: 3, Media: 2, Baja: 1 }[ev.confidence.level];
     body.innerHTML = `
       <div class="card"><div class="small muted">Orientación según todo lo analizado</div>
         <div style="font-size:18px;font-weight:700;margin:4px 0" class="${ev.kind === 'g' ? 'up' : ev.kind === 'r' ? 'down' : 'warn'}">${esc(ev.label)}</div>
-        <div style="position:relative;height:16px;border-radius:999px;margin:14px 0 4px;background:linear-gradient(90deg,#ef4444 0%,#f97316 25%,#f59e0b 50%,#84cc16 75%,#22c55e 100%)">
+        <div style="position:relative;height:16px;border-radius:999px;margin:14px 0 4px;background:linear-gradient(90deg,#ef4444 0%,#ef4444 12%,#f97316 30%,#f59e0b 50%,#84cc16 70%,#22c55e 88%,#22c55e 100%)">
           <div style="position:absolute;top:-6px;left:calc(${pos.toFixed(1)}% - 4px);width:8px;height:28px;border-radius:4px;background:#fff;box-shadow:0 0 0 2px #0b1220"></div></div>
-        <div class="row small muted" style="justify-content:space-between"><span>Vender</span><span>Reducir</span><span>Mantener</span><span>Acumular</span><span>Comprar</span></div>
+        <div class="small muted" style="display:grid;grid-template-columns:repeat(5,1fr);text-align:center">${[['sell', 'Reducir'], ['caut', 'Precaución'], ['hold', 'Mantener'], ['acc', 'Acumular'], ['buy', 'Comprar']].map(([k, l]) => `<span style="${A.bucketOf(ev.score) === k ? 'font-weight:700;color:var(--text)' : ''}">${l}</span>`).join('')}</div>
         <div class="small" style="margin-top:10px">Confianza: <b>${'●'.repeat(dots)}${'○'.repeat(3 - dots)} ${ev.confidence.level.toLowerCase()}</b> · ${esc(ev.confidence.text)}</div>
         ${ev.whyList && ev.whyList.length ? `<div class="small" style="margin-top:6px"><b>Lo que más pesa:</b>${ev.whyList.map(x => `<div class="${x.pro ? 'up' : 'down'}" style="margin-top:3px">${x.pro ? '✓ A favor' : '✗ En contra'}: <span style="color:var(--text)">${esc(x.text)}</span></div>`).join('')}</div>` : ''}</div>
       ${bt ? (() => { const st = bt.strategy, yr = new Date(st.from * 1000).getFullYear();
