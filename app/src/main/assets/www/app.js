@@ -730,6 +730,20 @@
     return extra;
   }
 
+  /** Bloque «Hasta dónde podría llegar» (1 mes, 3 meses, 12 meses). Se usa en Análisis y en Gráfica. */
+  function rangesCardHtml(a, ranges, fxR, curR, last, target) {
+    if (!ranges) return '';
+    return `<div class="card"><h2>Hasta dónde podría llegar</h2>
+        <div class="small muted" style="margin-bottom:8px">Según lo que se mueve ${esc(a.name)} (volatilidad de los últimos ${ranges[0].years} años: ${num(ranges[0].volYear * 100, 0)}% al año), hay unas 8 posibilidades de 10 de que el precio esté dentro de este rango.${ranges[1].calibrated ? ' Rango ajustado con lo que pasó de verdad en su historial.' : ''} No supone que vaya a subir ni a bajar: para eso mira la orientación en «Análisis».</div>
+        ${ranges.map(r => { const lo = r.low * fxR, hi = r.high * fxR, mid = r.mid * fxR, now = last * fxR;
+          const span = hi - lo || 1, pNow = Math.max(0, Math.min(100, (now - lo) / span * 100));
+          return `<div style="margin:12px 0"><div class="row small"><b class="grow">En ${r.label}</b><span class="muted">hoy ${num(now, 2)} ${curR}</span></div>
+            <div style="position:relative;height:10px;border-radius:6px;margin:8px 0 4px;background:linear-gradient(90deg,var(--down),var(--card2) ${pNow.toFixed(0)}%,var(--up))">
+              <div style="position:absolute;top:-4px;left:calc(${pNow.toFixed(1)}% - 2px);width:4px;height:18px;background:#fff;border-radius:2px"></div></div>
+            <div class="row small" style="justify-content:space-between"><span class="down">▼ ${num(lo, 2)} ${curR} (${pctS(r.lowPct)})</span><span class="up">${num(hi, 2)} ${curR} (${pctS(r.highPct)}) ▲</span></div></div>`; }).join('')}
+        ${target ? `<div class="small" style="margin-top:6px">Precio objetivo medio de los analistas a 12 meses: <b>${num(target * fxR, 2)} ${curR}</b> (${pctS(target / last - 1)}).</div>` : ''}
+        <div class="small muted" style="margin-top:8px">Es la estadística de su propio pasado, no una predicción: un suceso nuevo (resultados, aranceles, una crisis) puede sacarlo del rango. La marca blanca es el precio de hoy.</div></div>`;
+  }
   async function tabAnalysis(a, d, body) {
     const extra = await gatherExtra(a, d);
     const ev = A.evaluate(d, extra);
@@ -793,16 +807,7 @@
           <div><span>Precio actual</span><b>${num(m.last)}</b></div></div>
         ${watch.length ? `<h3>Qué vigilar</h3>${watch.map(x => `<div class="reason small">👁 ${esc(x)}</div>`).join('')}` : ''}
         <div class="small muted" style="margin-top:8px">Ningún análisis acierta siempre: esto son probabilidades a partir de los datos de hoy, y cambian cuando cambian los datos. Úsalo para no decidir por impulso, no como garantía.</div></div>
-      ${ranges ? `<div class="card"><h2>Hasta dónde podría llegar</h2>
-        <div class="small muted" style="margin-bottom:8px">Según lo que se mueve ${esc(a.name)} (volatilidad de los últimos ${ranges[0].years} años: ${num(ranges[0].volYear * 100, 0)}% al año), hay unas 8 posibilidades de 10 de que el precio esté dentro de este rango.${ranges[1].calibrated ? ' Rango ajustado con lo que pasó de verdad en su historial.' : ''} No supone que vaya a subir ni a bajar: para eso mira la orientación de arriba.</div>
-        ${ranges.map(r => { const lo = r.low * fxR, hi = r.high * fxR, mid = r.mid * fxR, now = m.last * fxR;
-          const span = hi - lo || 1, pNow = Math.max(0, Math.min(100, (now - lo) / span * 100));
-          return `<div style="margin:12px 0"><div class="row small"><b class="grow">En ${r.label}</b><span class="muted">hoy ${num(now, 2)} ${curR}</span></div>
-            <div style="position:relative;height:10px;border-radius:6px;margin:8px 0 4px;background:linear-gradient(90deg,var(--down),var(--card2) ${pNow.toFixed(0)}%,var(--up))">
-              <div style="position:absolute;top:-4px;left:calc(${pNow.toFixed(1)}% - 2px);width:4px;height:18px;background:#fff;border-radius:2px"></div></div>
-            <div class="row small" style="justify-content:space-between"><span class="down">▼ ${num(lo, 2)} ${curR} (${pctS(r.lowPct)})</span><span class="up">${num(hi, 2)} ${curR} (${pctS(r.highPct)}) ▲</span></div></div>`; }).join('')}
-        ${extra.summary && extra.summary.targetPrice ? `<div class="small" style="margin-top:6px">Precio objetivo medio de los analistas a 12 meses: <b>${num(extra.summary.targetPrice * fxR, 2)} ${curR}</b> (${pctS(extra.summary.targetPrice / m.last - 1)}).</div>` : ''}
-        <div class="small muted" style="margin-top:8px">Es la estadística de su propio pasado, no una predicción: un suceso nuevo (resultados, aranceles, una crisis) puede sacarlo del rango. La marca blanca es el precio de hoy.</div></div>` : ''}
+      ${rangesCardHtml(a, ranges, fxR, curR, m.last, extra.summary && extra.summary.targetPrice)}
       ${extra.leading || extra.regime ? (() => { const L = extra.leading || {}; return `<div class="card"><h2>Datos anticipadores</h2><div class="kv">
         ${extra.regime ? `<div><span>Mercado (${esc(extra.regime.ref)})</span><b class="${extra.regime.r === 'alcista' ? 'up' : extra.regime.r === 'bajista' ? 'down' : 'warn'}">${esc(extra.regime.r)}</b></div>` : ''}
         ${L.revUp != null ? `<div><span>Previsiones de analistas (4 sem.)</span><b>${L.revUp} ▲ · ${L.revDown} ▼</b></div>` : ''}
@@ -869,7 +874,17 @@
         <b>RSI</b>: por encima de 70 caro a corto plazo, por debajo de 30 barato.<br>
         <b>MACD</b>: barras verdes y crecientes = impulso alcista; rojas = bajista.<br>
         Ningún indicador acierta siempre; úsalos juntos y como orientación.</div></details></div>
+      <div id="rgBox"></div>
       <div class="card" id="histCard"></div>`;
+    (async () => { // también aquí los posibles precios a 1, 3 y 12 meses
+      const wk = await yahoo(a.yahoo, 'max', '1wk').catch(() => null); if (!wk) return;
+      const bt = await assetBacktest(a).catch(() => null), fxR = await fxToEur(d.meta.currency).catch(() => null) || 1;
+      const curR = fxR !== 1 || d.meta.currency === 'EUR' ? '€' : (d.meta.currency || '');
+      const last = d.meta.price || d.c[d.c.length - 1];
+      const ys = isCrypto(a) ? null : await yahooSummary(a.yahoo).catch(() => null);
+      const html = rangesCardHtml(a, A.priceRanges(wk, last, bt && bt.calib), fxR, curR, last, ys && ys.targetPrice);
+      if ($('#rgBox')) $('#rgBox').innerHTML = html;
+    })();
     body.querySelectorAll('[data-cd]').forEach(b => b.onclick = () => setP({ candle: b.dataset.cd }));
     body.querySelectorAll('[data-ty]').forEach(b => b.onclick = () => setP({ type: b.dataset.ty }));
     body.querySelectorAll('[data-mi]').forEach(b => b.onclick = () => { const k = b.dataset.mi; setP({ main: prefs.main.includes(k) ? prefs.main.filter(x => x !== k) : prefs.main.concat(k) }); });
