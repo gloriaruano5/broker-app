@@ -336,7 +336,7 @@
         <div class="btns" style="margin-top:10px"><button class="btn sec" id="taxBtn">Renta y plusvalías</button><button class="btn sec" id="jBtn">Diario de decisiones</button></div>
         <button class="btn" id="oppBtn" style="width:100%;margin-top:8px">🎯 Oportunidades de compra de hoy</button></div>
       <div class="card" id="alertsCard"><h2>Avisos</h2><div id="alerts" class="muted small">Analizando tus activos…</div></div>
-      <div class="card"><h2>Tus activos</h2><div id="list"></div><div class="small muted" style="margin-top:6px"><span class="sigb buy">▲</span> señal fuerte de compra · <span class="sigb sell">▼</span> señal fuerte de venta (en lugar del punto de color). Salen del análisis completo: gráfica, noticias, cuentas, analistas, directivos, grandes fondos y mercado. Orientativo.</div></div>
+      <div class="card"><h2>Tus activos</h2><div id="list"></div><div class="small muted" style="margin-top:6px"><span class="sigb buy">💰</span> señal fuerte de compra · <span class="sigb sell">⚠️</span> señal fuerte de venta (en lugar del punto de color). Salen del análisis completo: gráfica, noticias, cuentas, analistas, directivos, grandes fondos y mercado. Orientativo.</div></div>
       <div class="disclaimer">${DISCLAIMER}</div>`;
     $('#taxBtn').onclick = () => go('renta');
     $('#jBtn').onclick = () => go('diario');
@@ -392,7 +392,7 @@
       if (!el || current.name !== 'cartera') return;
       const dot = $('#dot-' + a.id); if (dot) dot.className = 'dot ' + ev.kind;
       // Solo las señales fuertes (Comprar / Reducir): la flecha ocupa el sitio del punto de color.
-      const M = { buy: ['buy', '▲', 'Señal fuerte de compra'], sell: ['sell', '▼', 'Señal fuerte de venta'] }[b];
+      const M = { buy: ['buy', '💰', 'Señal fuerte de compra'], sell: ['sell', '⚠️', 'Señal fuerte de venta'] }[b];
       if (M) { el.className = 'sigb ' + M[0]; el.textContent = M[1]; el.title = M[2] + ': ' + ev.label; el.hidden = false; if (dot) dot.hidden = true; }
       else { el.hidden = true; if (dot) dot.hidden = false; }
     })).catch(() => {});

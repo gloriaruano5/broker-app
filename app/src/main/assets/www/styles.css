@@ -137,7 +137,7 @@ label { font-size: 13px; color: var(--muted); }
 .kv3 b{white-space:nowrap}
 .kv3{column-gap:6px}
 .sigb{display:inline-block;font-size:13px;font-weight:800;line-height:1}
-.prow .sigb{width:12px;text-align:center;flex:none}
+.prow .sigb{width:18px;text-align:center;flex:none;font-size:15px}
 .sigb[hidden]{display:none}
 .sigb.buy{color:var(--up)}
 .sigb.sell{color:var(--down)}
