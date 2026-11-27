@@ -23,6 +23,8 @@ jobs:
       - name: Revisar el mercado
         timeout-minutes: 40
         run: node scripts/scan.mjs
+        env:
+          SEC_CONTACT: ${{ secrets.SEC_CONTACT || vars.SEC_CONTACT }}
       - name: Guardar cambios
         run: |
           git config user.name "github-actions[bot]"

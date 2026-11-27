@@ -710,7 +710,11 @@
     const s = sec && sec.assets && sec.assets[a.sec];
     const funds = sec && sec.funds && sec.funds.positions && sec.funds.positions[a.sec];
     const [leading, regime] = await Promise.all([leadingData(a).catch(() => null), marketRegime(a).catch(() => null)]);
-    const extra = { news: nw, fearGreed: fg, insiders: s && s.insiders, filings: s && s.filings, funds, geoNews: geo, sec, rules: a.rules, leading, regime };
+    const extra = { news: nw, fearGreed: fg, insiders: s && s.insiders, filings: s && s.filings, funds, geoNews: geo, sec, rules: a.rules, leading, regime,
+      name: a.name, dealFiling: s ? A.dealFiling(s.filings) : (a.dealFiling || null) };
+    // Si el precio está casi quieto, se buscan noticias de OPA o fusión de los últimos 4 meses para confirmarlo.
+    const pin = A.pinnedPrice(d);
+    if (pin && pin.pinned && !isCrypto(a)) extra.dealNews = await news(`"${a.name.replace(/\s*\(.*\)$/, '')}" acquisition OR merger OR takeover OR "tender offer" OR OPA`, { days: 120 }).catch(() => null);
     if (a.type === 'Acción') {
       const price = d.meta.price || d.c[d.c.length - 1];
       extra.valuation = null;
@@ -1496,12 +1500,12 @@
       fxToEur('USD').catch(() => null)
     ]);
     const seen = new Set([...mine, ...(window.WATCHLIST || []).map(w => w.yahoo)]);
-    const fromScan = scan && usd ? scan.top.filter(x => !seen.has(x.sym)).map(x => ({ w: { name: x.name, yahoo: x.sym, tag: [x.sector, x.idx].filter(Boolean).join(' · ') }, score: x.score, label: x.label, kind: x.kind, b: x.b, pxEur: x.px * usd, limit: x.limit * usd, y1: x.y1, night: true, fx: usd })) : [];
+    const fromScan = scan && usd ? scan.top.filter(x => !seen.has(x.sym)).map(x => ({ w: { name: x.name, yahoo: x.sym, tag: [x.sector, x.idx].filter(Boolean).join(' · ') }, score: x.score, label: x.label, kind: x.kind, b: x.b, pxEur: x.px * usd, limit: x.limit * usd, y1: x.y1, night: true, fx: usd, dealFiling: x.dealFiling || null })) : [];
     // Segunda vuelta: los 14 mejores por precio se analizan a fondo (noticias, analistas, cuentas, geopolítica…) y se reordenan.
-    const pre = [...phoneRes.filter(r => !mine.has(r.w.yahoo)), ...fromScan].filter(r => r.b === 'buy' || r.b === 'acc').sort((x, y) => y.score - x.score).slice(0, 14);
+    const pre = [...phoneRes.filter(r => !mine.has(r.w.yahoo)), ...fromScan].filter(r => r.b === 'buy' || r.b === 'acc').sort((x, y) => y.score - x.score).slice(0, 20);
     const deep = await Promise.all(pre.map(async r => {
       try {
-        const ta = { id: 'x:' + r.w.yahoo, name: r.w.name, yahoo: r.w.yahoo, type: /-USD$/.test(r.w.yahoo) ? 'Cripto' : 'Acción', news: r.w.name, themes: [] };
+        const ta = { id: 'x:' + r.w.yahoo, name: r.w.name, yahoo: r.w.yahoo, type: /-USD$/.test(r.w.yahoo) ? 'Cripto' : 'Acción', news: r.w.name, themes: [], dealFiling: r.dealFiling || null };
         const d = await yahoo(ta.yahoo, '2y', '1d');
         const extra = await gatherExtra(ta, d);
         const ev = A.evaluate(d, extra);
@@ -1512,13 +1516,15 @@
     }));
     // Objetivo: la mayor rentabilidad de la forma más fiable. A igual señal, va antes el que menos oscila (ajuste por riesgo).
     const riskAdj = r => r.score - 3 * Math.max(0, (r.sdD || 0) * Math.sqrt(252) - 0.3);
-    const outside = deep.filter(r => r.b === 'buy' || r.b === 'acc').sort((x, y) => riskAdj(y) - riskAdj(x)).slice(0, 8);
+    // Solo se proponen los confirmados: analizados a fondo, sin oferta de compra (precio fijado) y con al menos 3 tipos de datos que lo respalden.
+    const dropped = deep.filter(r => r.ev && r.ev.deal).map(r => r.w.name);
+    const outside = deep.filter(r => r.deep && r.ev && !r.ev.deal && (r.ev.cats || []).length >= 3 && (r.b === 'buy' || r.b === 'acc')).sort((x, y) => riskAdj(y) - riskAdj(x)).slice(0, 8);
     const watchN = (window.WATCHLIST || []).length + (scan ? scan.scanned : 0);
     const own = (settings.watch || []).length ? (await Promise.all(settings.watch.map(evalW))) : [];
     if (current.name !== 'oportunidades') return;
-    const balance = rows.filter(r => r.b !== 'caut' && r.b !== 'sell' && r.diff > 0.005).sort((x, y) => y.diff - x.diff || y.ev.score - x.ev.score).slice(0, 5);
+    const balance = rows.filter(r => !r.ev.deal && r.b !== 'caut' && r.b !== 'sell' && r.diff > 0.005).sort((x, y) => y.diff - x.diff || y.ev.score - x.ev.score).slice(0, 5);
     const asSig = r => ({ ev: r.ev, extra: r.extra, deep: true, ownId: r.a.id, w: { name: r.a.name, yahoo: r.a.yahoo, tag: 'En tu cartera' }, score: r.ev.score, label: r.ev.label, kind: r.ev.kind, b: r.b, pxEur: r.pxEur, limit: r.limit, y1: A.changeSince(r.sn.d.t, r.sn.d.c, 365), hist: histText(r.bt, r.b), bt: r.bt, sdD: r.sdD, fx: r.sn.fx });
-    const clear = [...rows.filter(r => r.b === 'buy' || r.b === 'acc').map(asSig), ...outside].sort((x, y) => riskAdj(y) - riskAdj(x)).slice(0, 10);
+    const clear = [...rows.filter(r => !r.ev.deal && (r.b === 'buy' || r.b === 'acc')).map(asSig), ...outside].sort((x, y) => riskAdj(y) - riskAdj(x)).slice(0, 10);
     const sells = rows.filter(r => r.sn.pos.qty > 0 && (r.b === 'caut' || r.b === 'sell')).sort((x, y) => x.ev.score - y.ev.score);
     const heavy = rows.filter(r => r.g && r.g.out && r.diff < 0 && r.b !== 'caut' && r.b !== 'sell');
     const monthly = +settings.monthly || planTotal() || 0;
@@ -1562,7 +1568,7 @@
         <div class="small muted" style="margin-bottom:6px">Activos tuyos que se han quedado por debajo del reparto propuesto. Completar el reparto con dinero nuevo es lo que mejor ha funcionado en la prueba histórica, aunque la señal no sea de compra clara. El precio de entrada es una bajada normal de una semana: se alcanza más o menos la mitad de las veces.</div>
         ${balance.length ? balance.map(card).join('') : '<div class="muted small">Tu cartera está cerca del reparto propuesto: no hace falta equilibrar.</div>'}</div>
       <div class="card"><h2>📈 Señales claras de compra</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
-        <div class="small muted" style="margin-bottom:6px">Las de señal más favorable, estén o no en tu cartera y sin mirar su peso. Revisados tus activos y ${num(watchN, 0)} más: ${(window.WATCHLIST || []).length} en el móvil (ETFs, grandes de EE. UU., Euro Stoxx 50 e IBEX 35)${scan ? ` y ${scan.scanned} del S&P 500 y Nasdaq 100 cada noche (último: ${esc(scan.date)})` : ''}. Se ordenan buscando la mayor rentabilidad con el menor riesgo: a señal parecida, va antes el que menos oscila. Primero se filtran por precio y tendencia, y los 14 mejores se analizan a fondo con noticias, analistas, cuentas y mercado. Para los que no tienes no hay datos oficiales de directivos ni de grandes fondos (solo se descargan de la SEC para tus activos). Aun así, nada garantiza que suba: si compras algo nuevo, empieza con poco (un 2-3% de tu cartera).</div>
+        <div class="small muted" style="margin-bottom:6px">Las de señal más favorable, estén o no en tu cartera y sin mirar su peso. Revisados tus activos y ${num(watchN, 0)} más: ${(window.WATCHLIST || []).length} en el móvil (ETFs, grandes de EE. UU., Euro Stoxx 50 e IBEX 35)${scan ? ` y ${scan.scanned} del S&P 500 y Nasdaq 100 cada noche (último: ${esc(scan.date)})` : ''}. Se ordenan buscando la mayor rentabilidad con el menor riesgo: a señal parecida, va antes el que menos oscila. Primero se filtran por precio y tendencia; los 20 mejores se contrastan a fondo (noticias, analistas, cuentas, sentimiento, mercado y avisos de OPA o fusión) y solo salen si lo confirman al menos 3 tipos de datos. ${dropped.length ? `Descartados por oferta de compra o precio fijado: ${esc(dropped.join(', '))}. ` : ''} Para los que no tienes no hay datos oficiales de directivos ni de grandes fondos (solo se descargan de la SEC para tus activos). Aun así, nada garantiza que suba: si compras algo nuevo, empieza con poco (un 2-3% de tu cartera).</div>
         ${clear.length ? clear.map((r, i) => oppOut(Object.assign(r, { earn: earn[r.w.yahoo], pr: prob[r.w.yahoo] }), i)).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
       <div class="card"><h2>📉 Para vender o reducir</h2>
         <div class="small muted" style="margin-bottom:6px">Tus activos con señal de precaución o de reducir. Nadie sabe con seguridad si algo va a bajar: por eso ves la fuerza de la señal y cuánto ha acertado antes en ese mismo activo.</div>

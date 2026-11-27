@@ -88,6 +88,37 @@
    * Junta todas las señales en una orientación.
    * daily: {t:[], c:[]} precios diarios; extra: {news, fearGreed, insiders, funds, filings}
    */
+  /**
+   * Precio «clavado»: cuando hay una oferta de compra (OPA) o una fusión acordada, el precio se queda pegado al de la oferta,
+   * casi sin moverse. La parte técnica lo leería como una subida muy estable, pero ya no hay recorrido: hay que descartarlo.
+   */
+  function pinnedPrice(daily) {
+    const c = daily.c, n = c.length; if (n < 260) return null;
+    const lr = (a, b) => { const o = []; for (let i = Math.max(1, a); i < b; i++) if (c[i] > 0 && c[i - 1] > 0) o.push(Math.log(c[i] / c[i - 1])); return o; };
+    const sd = x => { if (x.length < 5) return null; const m = x.reduce((p, q) => p + q, 0) / x.length; return Math.sqrt(x.reduce((p, q) => p + (q - m) ** 2, 0) / (x.length - 1)); };
+    const s20 = sd(lr(n - 20, n)), sYear = sd(lr(n - 290, n - 40));
+    if (!s20 || !sYear) return null;
+    const w = c.slice(-20), range = (Math.max(...w) - Math.min(...w)) / c[n - 1];
+    let jump = 0; for (let i = Math.max(1, n - 130); i < n; i++) { const r = c[i] / c[i - 1] - 1; if (r > jump) jump = r; }
+    const vol20 = s20 * Math.sqrt(252), ratio = s20 / sYear;
+    const pinned = (ratio < 0.4 && range < 0.04 && vol20 < 0.12) || (jump > 0.15 && ratio < 0.5 && range < 0.05);
+    return { pinned, vol20, ratio, range, jump };
+  }
+  const DEAL_RE = /\b(to be acquired|agrees? to (?:be )?(?:acquire|buy|sell)|definitive (?:merger )?agreement|merger agreement|tender offer|takeover|take[- ]private|buyout|acquisition of|to acquire|all-cash deal|per share in cash|OPA|oferta p[uú]blica de adquisici[oó]n|fusi[oó]n|adquirir|compra de)\b/i;
+  /** Titulares que hablan de una compra o fusión de la empresa (últimos 90 días). */
+  function dealNews(news, name) {
+    if (!news || !news.length) return [];
+    const key = String(name || '').replace(/\(.*?\)|,?\s+(Inc|Corp|Corporation|Co|Company|plc|S\.?A\.?|N\.?V\.?|AG|SE|Holdings?|Group|Ltd)\.?$/ig, '').trim().split(/\s+/)[0].toLowerCase();
+    return news.filter(x => DEAL_RE.test(x.title || '') && (!key || key.length < 3 || (x.title || '').toLowerCase().includes(key)));
+  }
+  // Formularios de la SEC que presenta una empresa cuando la van a comprar o se fusiona (la compradora o la comprada).
+  const DEAL_FORMS = ['DEFM14A', 'PREM14A', 'DEFM14C', 'PREM14C', 'SC 14D9', 'SC 14D9/A', 'SC TO-T', 'SC TO-T/A', 'SC 13E3', 'SC 13E3/A', '425'];
+  /** Primer formulario de compra/fusión de los últimos 180 días, si lo hay. filings = [{form, date}] */
+  function dealFiling(filings, now = Date.now()) {
+    const lim = new Date(now - 180 * 86400000).toISOString().slice(0, 10);
+    const f = (filings || []).find(x => DEAL_FORMS.includes(String(x.form).toUpperCase()) && String(x.date) >= lim);
+    return f ? `${f.form} (${f.date})` : null;
+  }
   function evaluate(daily, extra = {}) {
     const reasons = [];
     const alerts = [];
@@ -248,6 +279,24 @@
     else if (score > -0.75) { label = 'Neutral: mantener y vigilar'; kind = 'y'; }
     else if (score > -2) { label = 'Precaución: no perseguir el precio'; kind = 'r'; }
     else { label = 'Señales negativas: valorar reducir o proteger ganancias'; kind = 'r'; }
+    // Oferta de compra o fusión: el precio queda fijado; la señal técnica no sirve y no se debe proponer como compra.
+    const pin = pinnedPrice(daily), deals = dealNews([...(extra.news || []), ...(extra.dealNews || [])], extra.name);
+    let deal = null;
+    if (extra.deal || (pin && pin.pinned && (deals.length || pin.jump > 0.15)) || (pin && pin.pinned && extra.dealFiling)) {
+      deal = { pin, news: deals.slice(0, 3).map(x => x.title), filing: extra.dealFiling || null };
+      reasons.unshift({ pts: -3, kind: 'r', text: `Posible oferta de compra o fusión en curso${extra.dealFiling ? ` (la empresa ha presentado a la SEC un ${extra.dealFiling})` : deals.length ? ` («${deals[0].title.slice(0, 90)}»)` : ''}: el precio está casi fijado (se mueve un ${(pin ? pin.vol20 * 100 : 0).toFixed(0)}% al año, frente a lo normal), así que apenas tiene recorrido. No se propone para comprar.` });
+      score = Math.min(score, 0) - 0.01;
+      label = 'Oferta de compra en curso: precio fijado, sin recorrido'; kind = 'y';
+      alerts.push({ kind: 'y', text: 'Precio casi fijado: probablemente hay una oferta de compra o fusión. La señal técnica no sirve aquí.' });
+    } else if (pin && pin.pinned) {
+      reasons.unshift({ pts: -1, kind: 'y', text: `El precio casi no se mueve desde hace un mes (${(pin.vol20 * 100).toFixed(0)}% al año, mucho menos de lo normal en este valor). Suele pasar cuando hay una oferta de compra: compruébalo antes de comprar.` });
+      score -= 1;
+      if (score >= 2) { label = 'Señales favorables: posible zona de compra'; kind = 'g'; }
+      else if (score >= 0.75) { label = 'Ligeramente favorable: mantener o comprar poco a poco'; kind = 'g'; }
+      else if (score > -0.75) { label = 'Neutral: mantener y vigilar'; kind = 'y'; }
+      else if (score > -2) { label = 'Precaución: no perseguir el precio'; kind = 'r'; }
+      else { label = 'Señales negativas: valorar reducir o proteger ganancias'; kind = 'r'; }
+    }
 
     // Confianza: cuántos tipos de datos hay y cuánto coinciden entre sí.
     const plus = reasons.filter(r => r.pts > 0).reduce((a, r) => a + r.pts, 0);
@@ -288,7 +337,7 @@
     reasons.filter(r => r.pts < 0).sort((a, b) => a.pts - b.pts).slice(0, 3).forEach(r => sc.risks.push(r.text.split(/\. /)[0].replace(/\.$/, '')));
     // Posición en la barra de -1 (vender) a +1 (comprar).
     const bar = Math.max(-1, Math.min(1, score / 4));
-    return { score, label, kind, reasons, alerts, metrics: m, news: ns, confidence, why, whyList, scenario: sc, bar };
+    return { score, label, kind, reasons, alerts, metrics: m, news: ns, confidence, why, whyList, scenario: sc, bar, deal, pinned: pin, cats: [...cats] };
   }
 
   function pct(x) { return (x * 100).toFixed(0) + '%'; }
@@ -477,7 +526,7 @@
     const n = c.length - 1, s50 = sma(c, 50)[n], s200 = sma(c, 200)[n], up = c[n] > s200, g = s50 > s200;
     return up && g ? 'alcista' : !up && !g ? 'bajista' : 'lateral';
   }
-  const api = { regimeOf, backtest, backtestVerdict, bucketOf, BUCKETS, priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
+  const api = { pinnedPrice, dealNews, dealFiling, DEAL_FORMS, regimeOf, backtest, backtestVerdict, bucketOf, BUCKETS, priceRanges, historicalOdds, importantNews, sma, rsi, changeSince, volatility, headlineScore, isGeo, newsSentiment, evaluate, signed };
   root.Analysis = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
