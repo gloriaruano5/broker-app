@@ -130,3 +130,6 @@ label { font-size: 13px; color: var(--muted); }
 .factors ul { margin: 2px 0 6px; padding-left: 18px; }
 .factors li { margin: 2px 0; }
 .factors .off { opacity: .55; }
+.pa{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.pa .btn{font-size:13px;padding:6px 10px;margin:0;width:auto;flex:0 1 auto}
+.pa .btn.pa-on{border-color:var(--accent)}

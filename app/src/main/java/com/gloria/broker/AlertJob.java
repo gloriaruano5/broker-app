@@ -29,9 +29,11 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.TimeZone;
 import java.util.zip.GZIPInputStream;
 
@@ -115,6 +117,7 @@ public class AlertJob extends JobService {
         JSONArray assets = cfg.optJSONArray("assets"); if (assets == null) assets = new JSONArray();
         double th = cfg.optDouble("moveTh", 0.08);
         int prices = 0;
+        Map<String, Object[]> qc = new HashMap<>();
 
         // 1) Precios: movimientos fuertes del día y tus precios de aviso.
         if (cfg.optBoolean("move", true) || cfg.optBoolean("levels", true)) {
@@ -125,6 +128,7 @@ public class AlertJob extends JobService {
                 Object[] q;
                 try { q = quote(sym); } catch (Exception e) { continue; }
                 if (q == null) continue;
+                qc.put(sym, q);
                 prices++;
                 double px = (Double) q[0], prev = (Double) q[1];
                 String ccy = (String) q[2];
@@ -145,6 +149,64 @@ public class AlertJob extends JobService {
                 }
             }
         }
+
+        // 1b) Avisos de precio puestos desde Oportunidades (entrada recomendada, caída fuerte...).
+        JSONArray pa = cfg.optJSONArray("palerts");
+        JSONObject paSt = st.optJSONObject("pa"); if (paSt == null) { paSt = new JSONObject(); st.put("pa", paSt); }
+        JSONArray paHit = st.optJSONArray("paHit"); if (paHit == null) paHit = new JSONArray();
+        if (pa != null && cfg.optBoolean("levels", true)) {
+            JSONArray keep = new JSONArray();
+            for (int i = 0; i < pa.length(); i++) {
+                JSONObject x = pa.getJSONObject(i);
+                String k = x.optString("k"), sym = x.optString("sym"), name = x.optString("name", sym), what = x.optString("what");
+                double v = x.optDouble("v", 0), eur = x.optDouble("eur", 0); boolean below = x.optBoolean("below", true);
+                if (k.isEmpty() || sym.isEmpty() || !(v > 0)) continue;
+                for (int j = 0; j < paHit.length(); j++) if (paHit.optString(j).equals(k)) keep.put(k);
+                Object[] q = qc.get(sym);
+                if (q == null) { try { q = quote(sym); } catch (Exception e) { q = null; } if (q != null) { qc.put(sym, q); prices++; } }
+                if (q == null) continue;
+                double px = (Double) q[0]; String ccy = (String) q[2];
+                boolean hit = below ? px <= v : px >= v;
+                String asset = x.isNull("id") ? null : x.optString("id", null);
+                if (asset != null && asset.isEmpty()) asset = null;
+                if (hit && paSt.optDouble(k, 0) != v) {
+                    String t = what.equals("entrada") ? name + " ha llegado a tu precio de entrada (≈" + fmt(eur) + " €)"
+                            : what.equals("stop") ? name + " ha caído fuerte (≈" + fmt(eur) + " €)"
+                            : name + (below ? " ha bajado a " : " ha subido a ") + "≈" + fmt(eur) + " €";
+                    String tx = "Precio ahora " + fmt(px) + " " + ccy + ". " + (what.equals("stop")
+                            ? "Es una bajada fuera de lo normal en un mes. Mira las noticias y el análisis antes de decidir; no vendas por impulso."
+                            : "Mira el análisis en la app antes de comprar: la señal puede haber cambiado.");
+                    out.add(new Alert(1, "pa:" + k, t, tx, asset));
+                    paSt.put(k, v);
+                    boolean seen = false; for (int j = 0; j < keep.length(); j++) if (keep.optString(j).equals(k)) seen = true;
+                    if (!seen) keep.put(k);
+                } else if (!hit && (below ? px > v * 1.02 : px < v * 0.98)) paSt.remove(k); // se vuelve a activar si se aleja
+            }
+            st.put("paHit", keep);
+        }
+
+        // 1c) Eventos: el día antes (o el mismo día, si no dio tiempo) de resultados y eventos de impacto alto.
+        JSONArray evs = cfg.optJSONArray("events");
+        JSONObject evSt = st.optJSONObject("evs"); if (evSt == null) { evSt = new JSONObject(); st.put("evs", evSt); }
+        if (evs != null && cfg.optBoolean("ev", true)) {
+            Calendar tm = (Calendar) now.clone(); tm.add(Calendar.DAY_OF_MONTH, 1);
+            String tomorrow = df.format(tm.getTime());
+            for (int i = 0; i < evs.length(); i++) {
+                JSONObject e = evs.getJSONObject(i);
+                String k = e.optString("k"), date = e.optString("date");
+                if (k.isEmpty() || evSt.has(k)) continue;
+                boolean tmw = date.equals(tomorrow), tdy = date.equals(today) && hour < 15;
+                if (!tmw && !tdy) continue;
+                String asset = e.isNull("id") ? null : e.optString("id", null);
+                if (asset != null && asset.isEmpty()) asset = null;
+                out.add(new Alert(2, "ev:" + k, (tmw ? "Mañana: " : "Hoy: ") + e.optString("title"), e.optString("text"), asset));
+                evSt.put(k, date);
+            }
+        }
+        // Olvida eventos ya pasados.
+        List<String> old = new ArrayList<>();
+        for (Iterator<String> it = evSt.keys(); it.hasNext(); ) { String k = it.next(); if (evSt.optString(k).compareTo(today) < 0) old.add(k); }
+        for (String k : old) evSt.remove(k);
 
         // 2) Resumen diario del servidor: señal de la app, miedo y codicia, compras de directivos.
         String repo = cfg.optString("repo", "gloriaruano5/broker-app"), branch = cfg.optString("branch", "main");
@@ -305,6 +367,7 @@ public class AlertJob extends JobService {
             JSONObject st = new JSONObject(prefs(c).getString("st", "{}")), o = new JSONObject();
             o.put("perm", allowed(c)); o.put("last", st.optLong("last", 0)); o.put("today", st.optInt("count", 0));
             o.put("log", prefs(c).getString("log", "")); o.put("lastAlerts", st.optInt("lastAlerts", 0)); o.put("lastPrices", st.optInt("lastPrices", 0));
+            JSONArray ph = st.optJSONArray("paHit"); o.put("paHit", ph == null ? new JSONArray() : ph);
             return o.toString();
         } catch (Exception e) { return "{}"; }
     }

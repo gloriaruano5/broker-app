@@ -1030,31 +1030,7 @@
     view.innerHTML = '<div class="loading">Buscando fechas…</div>';
     const today = new Date().toISOString().slice(0, 10);
     const limit = new Date(Date.now() + 200 * 86400000).toISOString().slice(0, 10);
-    const ev = [];
-    (window.MACRO_EVENTS || []).forEach(([dt, label]) => ev.push({ date: dt, label, kind: 'macro' }));
-    const sec = await secData().catch(() => null);
-    await Promise.all(assets.map(async a => {
-      let gotEarnings = false;
-      if (!isCrypto(a)) {
-        const ys = await yahooSummary(a.yahoo).catch(() => null);
-        if (ys && (a.type === 'Acción' || a.type === 'Fondo cotizado')) {
-          (ys.earnings || []).slice(0, 1).forEach(ts => { ev.push({ date: new Date(ts * 1000).toISOString().slice(0, 10), label: `${a.name}: presenta resultados`, kind: 'res', a }); gotEarnings = true; });
-        }
-        if (ys && ys.exDiv) {
-          ev.push({ date: new Date(ys.exDiv * 1000).toISOString().slice(0, 10), label: `${a.name}: fecha ex-dividendo${ys.divYield ? ' (rent. ' + num(ys.divYield * 100, 1) + '%)' : ''}`, kind: 'div', a });
-        }
-      }
-      const s = a.sec && sec && sec.assets && sec.assets[a.sec];
-      if (!gotEarnings && s && s.nextReport && a.type !== 'ETF') ev.push({ date: s.nextReport.estimate, label: `${a.name}: resultados (fecha estimada)`, kind: 'res', a, est: true });
-      // Dividendos pasados para estimar el siguiente (útil en ETF de distribución).
-      const d = await daily(a).catch(() => null);
-      if (d && d.div && d.div.length >= 2) {
-        const lastD = d.div[d.div.length - 1], prevD = d.div[d.div.length - 2];
-        const step = lastD.t - prevD.t;
-        const next = new Date((lastD.t + step) * 1000).toISOString().slice(0, 10);
-        if (!ev.some(e => e.kind === 'div' && e.a === a && e.date >= today)) ev.push({ date: next, label: `${a.name}: próximo dividendo (estimado, último ${num(lastD.amount, 3)} ${esc(d.meta.currency || '')})`, kind: 'div', a, est: true });
-      }
-    }));
+    const ev = await assetEvents();
     if (current.name !== 'agenda') return;
     const kev = await keyEvents();
     const held = assets.filter(a => window.Portfolio.position(a).qty > 0);
@@ -1080,7 +1056,7 @@
     const up = ev.filter(e => e.date >= today && e.date <= limit).sort((x, y) => x.date.localeCompare(y.date));
     const icon = { macro: '🏦', res: '📊', div: '💶' };
     let lastMonth = '';
-    view.innerHTML = `<div class="card"><h2>⚠️ Eventos clave que pueden mover mucho el precio</h2>${keyHtml || '<div class="muted">Ninguno próximo.</div>'}
+    view.innerHTML = `${notifCfg().on && notifCfg().ev ? '<div class="card small">🔔 Te avisaremos en el móvil el día antes de los resultados de tus empresas y de los eventos de impacto alto.</div>' : '<div class="card small muted">🔔 Puedes recibir un aviso el día antes de cada evento importante: actívalo en Ajustes &gt; Notificaciones.</div>'}<div class="card"><h2>⚠️ Eventos clave que pueden mover mucho el precio</h2>${keyHtml || '<div class="muted">Ninguno próximo.</div>'}
       <div class="small muted">Para invertir a largo plazo, lo normal es no vender por un evento concreto, sino evitar comprar justo antes y no tener demasiado peso en un solo activo. La lista se actualiza sin instalar versiones nuevas.</div></div>
       <div class="card"><h2>Calendario completo (6 meses)</h2>
       ${up.map(e => {
@@ -1092,6 +1068,87 @@
         return head + `<div class="reason">${icon[e.kind]} <b>${dt.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric' })}</b> ${esc(e.label)}${e.est ? ' <span class="badge">estimada</span>' : ''} <span class="muted small">${days <= 0 ? 'hoy' : 'en ' + days + ' d'}</span></div>`;
       }).join('') || '<div class="muted">Sin fechas.</div>'}</div>
       <div class="small muted">Las fechas de resultados y dividendos son de Yahoo Finance cuando están disponibles; si no, se estiman a partir de la última presentación. Las de la Fed y el BCE son oficiales. Antes de un resultado o una decisión de tipos el precio suele moverse más de lo normal.</div>`;
+  }
+  /** Resultados y dividendos de cada activo (Yahoo, o la SEC si Yahoo no da fecha) y reuniones de bancos centrales. */
+  async function assetEvents() {
+    const today = new Date().toISOString().slice(0, 10);
+    const ev = [];
+    (window.MACRO_EVENTS || []).forEach(([dt, label]) => ev.push({ date: dt, label, kind: 'macro' }));
+    const sec = await secData().catch(() => null);
+    await Promise.all(assets.map(async a => {
+      let gotEarnings = false;
+      if (!isCrypto(a)) {
+        const ys = await yahooSummary(a.yahoo).catch(() => null);
+        if (ys && (a.type === 'Acción' || a.type === 'Fondo cotizado')) {
+          (ys.earnings || []).slice(0, 1).forEach(ts => { ev.push({ date: new Date(ts * 1000).toISOString().slice(0, 10), label: `${a.name}: presenta resultados`, kind: 'res', a }); gotEarnings = true; });
+        }
+        if (ys && ys.exDiv) {
+          ev.push({ date: new Date(ys.exDiv * 1000).toISOString().slice(0, 10), label: `${a.name}: fecha ex-dividendo${ys.divYield ? ' (rent. ' + num(ys.divYield * 100, 1) + '%)' : ''}`, kind: 'div', a });
+        }
+      }
+      const s = a.sec && sec && sec.assets && sec.assets[a.sec];
+      if (!gotEarnings && s && s.nextReport && a.type !== 'ETF') ev.push({ date: s.nextReport.estimate, label: `${a.name}: resultados (fecha estimada)`, kind: 'res', a, est: true });
+      // Dividendos pasados para estimar el siguiente (útil en ETF de distribución).
+      const d = await daily(a).catch(() => null);
+      if (d && d.div && d.div.length >= 2) {
+        const lastD = d.div[d.div.length - 1], prevD = d.div[d.div.length - 2];
+        const step = lastD.t - prevD.t;
+        const next = new Date((lastD.t + step) * 1000).toISOString().slice(0, 10);
+        if (!ev.some(e => e.kind === 'div' && e.a === a && e.date >= today)) ev.push({ date: next, label: `${a.name}: próximo dividendo (estimado, último ${num(lastD.amount, 3)} ${esc(d.meta.currency || '')})`, kind: 'div', a, est: true });
+      }
+    }));
+    return ev;
+  }
+  /** Lo que se avisa en el móvil: resultados de tus empresas y eventos de impacto alto que te afectan, en las próximas 3 semanas. */
+  let evFeedV = load('evFeedV', []);
+  async function eventFeed() {
+    return cached('evfeed:' + assets.length, 720, async () => {
+      const today = new Date().toISOString().slice(0, 10), lim = new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10);
+      const [ev, kev] = await Promise.all([assetEvents(), keyEvents().catch(() => [])]);
+      const held = assets.filter(a => { try { return window.Portfolio.position(a).qty > 0; } catch (e) { return false; } });
+      const out = [];
+      ev.filter(e => e.kind === 'res' && e.a && held.includes(e.a) && e.date >= today && e.date <= lim).forEach(e => out.push({ k: 'res:' + e.a.id + ':' + e.date, date: e.date, id: e.a.id, sym: e.a.yahoo, type: 'res',
+        title: `${e.a.name} presenta resultados${e.est ? ' (fecha estimada)' : ''}`, text: 'Ese día y el siguiente el precio suele moverse mucho más de lo normal. Si pensabas comprar, suele ser más prudente esperar a ver los resultados.' }));
+      kev.filter(e => e.impact === 'alto' && e.date >= today && e.date <= lim).forEach(e => {
+        const aff = held.filter(a => eventAffects(e, a)); if (!aff.length) return;
+        out.push({ k: 'ev:' + e.date + ':' + e.title, date: e.date, id: aff.length === 1 ? aff[0].id : null, type: e.type || 'macro', title: e.title,
+          text: ((e.themes || []).includes('todos') ? 'Afecta a toda tu cartera. ' : 'Afecta a ' + aff.map(a => a.name).join(', ') + '. ') + 'Si pensabas comprar, esperar a conocer el resultado evita entrar justo antes de un salto.' });
+      });
+      return out.sort((x, y) => x.date.localeCompare(y.date));
+    });
+  }
+  function refreshEvents() { return eventFeed().then(f => { evFeedV = f; save('evFeedV', f); syncNotif(); return f; }).catch(() => evFeedV); }
+  /** Avisos de precio: entrada recomendada, caída fuerte (stop) u otro precio. Se guardan en la moneda del activo. */
+  const palerts = () => settings.priceAlerts || (settings.priceAlerts = []);
+  function paHtml(o) {
+    if (!(o.pxEur > 0) || !(o.fx > 0)) return '';
+    const mk = (what, eurV, below, txt) => {
+      const k = what + ':' + o.sym, have = palerts().find(x => x.k === k);
+      return have ? `<button class="btn sec pa-on" data-pdel="${esc(k)}">🔔 ${esc(txt)} a ${num(have.eur, 2)} € ✓ <span class="muted">(quitar)</span></button>`
+        : `<button class="btn sec" data-pa="${what}" data-sym="${esc(o.sym)}" data-nm="${esc(o.name)}" data-id="${esc(o.id || '')}" data-eur="${eurV}" data-fx="${o.fx}" data-below="${below ? 1 : 0}">🔔 ${esc(txt)} a ${num(eurV, 2)} €</button>`;
+    };
+    const sd = o.limit > 0 ? -Math.log(o.limit / o.pxEur) / (0.7 * Math.sqrt(5)) : 0;
+    const fall = sd > 0 ? o.pxEur * Math.exp(-1.2816 * sd * Math.sqrt(21)) : o.pxEur * 0.9;
+    return `<div class="pa">${o.limit > 0 && o.limit < o.pxEur ? mk('entrada', o.limit, true, 'Avísame en la entrada') : ''}${mk('stop', fall, true, 'Avísame si cae fuerte')}</div>`;
+  }
+  function bindPa(root, after) {
+    root.querySelectorAll('[data-pa]').forEach(b => b.onclick = e => {
+      e.stopPropagation(); const d = b.dataset, eurV = +d.eur;
+      settings.priceAlerts = palerts().filter(x => x.k !== d.pa + ':' + d.sym).concat([{ k: d.pa + ':' + d.sym, what: d.pa, sym: d.sym, name: d.nm, id: d.id || null, eur: eurV, v: eurV / +d.fx, below: d.below === '1', at: Date.now() }]);
+      save('settings', settings); syncNotif();
+      toast(notifCfg().on ? 'Aviso guardado: te llegará una notificación' : 'Aviso guardado. Activa las notificaciones en Ajustes para recibirlo');
+      if (after) after(); else { b.innerHTML = `🔔 Aviso puesto a ${num(eurV, 2)} € ✓`; b.disabled = true; }
+    });
+    root.querySelectorAll('[data-pdel]').forEach(b => b.onclick = e => { e.stopPropagation(); settings.priceAlerts = palerts().filter(x => x.k !== b.dataset.pdel); save('settings', settings); syncNotif();
+      if (after) after(); else { b.innerHTML = 'Aviso quitado'; b.disabled = true; } });
+  }
+  /** Aviso en la tarjeta si hay resultados pronto (no conviene entrar justo antes). */
+  function evWarn(date, est) {
+    if (!date) return '';
+    const days = Math.round((new Date(date + 'T12:00:00') - Date.now()) / 86400000);
+    if (days < 0 || days > 14) return '';
+    const dt = new Date(date + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+    return `<div class="signal y small" style="margin-top:6px">⚠️ <b>Presenta resultados ${days <= 0 ? 'hoy' : days === 1 ? 'mañana' : 'en ' + days + ' días'}</b> (${dt}${est ? ', aprox.' : ''}). Ese día el precio puede moverse un 5-15%. Si quieres comprar, es más prudente esperar a después o entrar con poco.</div>`;
   }
 
   // ---------- Vista: Renta ----------
@@ -1235,7 +1292,8 @@
   function oppOut(r, i, del) {
     return `<div class="opp" data-open="${esc(r.ownId || '')}" data-sym="${esc(r.w.yahoo)}" data-nm="${esc(r.w.name)}"><div class="row"><span class="badge">${del ? '★' : i + 1}</span><b class="grow" style="font-size:16px">${esc(r.w.name)}</b><span class="dot ${r.kind}"></span>${del ? `<button class="icon" data-wdel="${esc(del)}">✕</button>` : ''}</div>
       <div class="small muted">${esc(r.w.tag)} · ${esc(r.w.yahoo)}${r.y1 != null ? ` · último año <span class="${cls(r.y1)}">${pctS(r.y1)}</span>` : ''}</div>
-      <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
+      <div class="kv" style="margin-top:8px"><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>${evWarn(r.earn)}
+      ${paHtml({ sym: r.w.yahoo, name: r.w.name, id: r.ownId, pxEur: r.pxEur, fx: r.fx, limit: r.limit })}
       ${targetBlock(r.pxEur, r.limit, r.bt, r.b)}
       <div class="small" style="margin-top:4px">Señal: <b class="${r.score > 0 ? 'up' : r.score < 0 ? 'down' : ''}">${strength(r.score)}</b> · «${esc(r.label)}»${r.night ? ' (revisión de anoche, precio en dólares pasado a euros)' : ''}.</div>
       ${factorsHtml(r.ev, r.extra)}
@@ -1283,7 +1341,7 @@
         const c = d.c.slice(-61), lr = []; for (let i = 1; i < c.length; i++) if (c[i] > 0 && c[i - 1] > 0) lr.push(Math.log(c[i] / c[i - 1]));
         const mu = lr.reduce((x, y) => x + y, 0) / (lr.length || 1), sdD = Math.sqrt(lr.reduce((x, y) => x + (y - mu) ** 2, 0) / Math.max(1, lr.length - 1));
         const pxEur = (d.meta.price || d.c[d.c.length - 1]) * fx;
-        return { w: { name: w.name, yahoo: w.yahoo, tag: w.tag || w.type || '' }, score: ev.score, label: ev.label, kind: ev.kind, b: A.bucketOf(ev.score), pxEur, limit: pxEur * Math.exp(-0.7 * sdD * Math.sqrt(5)), y1: A.changeSince(d.t, d.c, 365), sdD };
+        return { w: { name: w.name, yahoo: w.yahoo, tag: w.tag || w.type || '' }, score: ev.score, label: ev.label, kind: ev.kind, b: A.bucketOf(ev.score), pxEur, limit: pxEur * Math.exp(-0.7 * sdD * Math.sqrt(5)), y1: A.changeSince(d.t, d.c, 365), sdD, fx };
       } catch (e) { return null; }
     };
     // Los ~100 de la lista se revisan como mucho cada 6 horas (se guarda el resultado), para no saturar a Yahoo.
@@ -1293,7 +1351,7 @@
       fxToEur('USD').catch(() => null)
     ]);
     const seen = new Set([...mine, ...(window.WATCHLIST || []).map(w => w.yahoo)]);
-    const fromScan = scan && usd ? scan.top.filter(x => !seen.has(x.sym)).map(x => ({ w: { name: x.name, yahoo: x.sym, tag: [x.sector, x.idx].filter(Boolean).join(' · ') }, score: x.score, label: x.label, kind: x.kind, b: x.b, pxEur: x.px * usd, limit: x.limit * usd, y1: x.y1, night: true })) : [];
+    const fromScan = scan && usd ? scan.top.filter(x => !seen.has(x.sym)).map(x => ({ w: { name: x.name, yahoo: x.sym, tag: [x.sector, x.idx].filter(Boolean).join(' · ') }, score: x.score, label: x.label, kind: x.kind, b: x.b, pxEur: x.px * usd, limit: x.limit * usd, y1: x.y1, night: true, fx: usd })) : [];
     // Segunda vuelta: los 14 mejores por precio se analizan a fondo (noticias, analistas, cuentas, geopolítica…) y se reordenan.
     const pre = [...phoneRes.filter(r => !mine.has(r.w.yahoo)), ...fromScan].filter(r => r.b === 'buy' || r.b === 'acc').sort((x, y) => y.score - x.score).slice(0, 14);
     const deep = await Promise.all(pre.map(async r => {
@@ -1314,7 +1372,7 @@
     const own = (settings.watch || []).length ? (await Promise.all(settings.watch.map(evalW))) : [];
     if (current.name !== 'oportunidades') return;
     const balance = rows.filter(r => r.b !== 'caut' && r.b !== 'sell' && r.diff > 0.005).sort((x, y) => y.diff - x.diff || y.ev.score - x.ev.score).slice(0, 5);
-    const asSig = r => ({ ev: r.ev, extra: r.extra, deep: true, ownId: r.a.id, w: { name: r.a.name, yahoo: r.a.yahoo, tag: 'En tu cartera' }, score: r.ev.score, label: r.ev.label, kind: r.ev.kind, b: r.b, pxEur: r.pxEur, limit: r.limit, y1: A.changeSince(r.sn.d.t, r.sn.d.c, 365), hist: histText(r.bt, r.b), bt: r.bt, sdD: r.sdD });
+    const asSig = r => ({ ev: r.ev, extra: r.extra, deep: true, ownId: r.a.id, w: { name: r.a.name, yahoo: r.a.yahoo, tag: 'En tu cartera' }, score: r.ev.score, label: r.ev.label, kind: r.ev.kind, b: r.b, pxEur: r.pxEur, limit: r.limit, y1: A.changeSince(r.sn.d.t, r.sn.d.c, 365), hist: histText(r.bt, r.b), bt: r.bt, sdD: r.sdD, fx: r.sn.fx });
     const clear = [...rows.filter(r => r.b === 'buy' || r.b === 'acc').map(asSig), ...outside].sort((x, y) => riskAdj(y) - riskAdj(x)).slice(0, 10);
     const sells = rows.filter(r => r.sn.pos.qty > 0 && (r.b === 'caut' || r.b === 'sell')).sort((x, y) => x.ev.score - y.ev.score);
     const heavy = rows.filter(r => r.g && r.g.out && r.diff < 0 && r.b !== 'caut' && r.b !== 'sell');
@@ -1327,31 +1385,46 @@
       return `<div class="opp" data-open="${esc(r.a.id)}"><div class="row"><span class="badge">${i + 1}</span><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
         <div class="kv" style="margin-top:8px"><div><span>Pesa ahora / propuesto</span><b>${num(r.g.cw * 100, 1)}% → ${num(r.g.tw * 100, 1)}%</b></div>${amt ? `<div><span>Cuánto, orientativo</span><b>${eur(amt)}</b></div>` : ''}
         <div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div><div><span>Entrada recomendada</span><b class="up">${num(r.limit, 2)} €</b></div></div>
-        <div class="small" style="margin-top:6px">${when}</div>
+        <div class="small" style="margin-top:6px">${when}</div>${evWarn(earn[r.a.yahoo])}
+        ${paHtml({ sym: r.a.yahoo, name: r.a.name, id: r.a.id, pxEur: r.pxEur, fx: r.sn.fx, limit: r.limit })}
         ${targetBlock(r.pxEur, r.limit, r.bt, r.b)}
         <div class="small muted" style="margin-top:4px">Señal de la app: «${esc(r.ev.label)}».</div>${factorsHtml(r.ev, r.extra)}</div>`;
     };
+    // Resultados en los próximos 14 días (para no entrar justo antes) y eventos de impacto alto de esta semana.
+    const earn = {};
+    const shown = [...balance.map(r => r.a.yahoo), ...clear.map(r => r.w.yahoo), ...own.filter(Boolean).map(r => r.w.yahoo)];
+    await Promise.all([...new Set(shown)].filter(sym => !/-USD$|=F$|=X$|^\^/.test(sym)).map(async sym => {
+      const ys = await yahooSummary(sym).catch(() => null);
+      const t = ys && (ys.earnings || []).find(x => x * 1000 > Date.now() - 86400000);
+      if (t) earn[sym] = new Date(t * 1000).toISOString().slice(0, 10);
+    }));
+    const wk = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), td = new Date().toISOString().slice(0, 10);
+    const soon = (await keyEvents().catch(() => [])).filter(e => e.impact === 'alto' && e.date >= td && e.date <= wk);
+    if (current.name !== 'oportunidades') return;
     const sellCard = r => {
       const pl = r.sn.plEur;
       return `<div class="opp" data-open="${esc(r.a.id)}"><div class="row"><b class="grow" style="font-size:16px">${esc(r.a.name)}</b><span class="dot ${r.ev.kind}"></span></div>
         <div class="kv" style="margin-top:8px"><div><span>Fuerza de la señal</span><b class="down">${strength(r.ev.score)}</b></div><div><span>Precio ahora</span><b>${num(r.pxEur, 2)} €</b></div>
         ${pl != null ? `<div><span>Ganas o pierdes</span><b class="${cls(pl)}">${pl >= 0 ? '+' : ''}${eur(pl)}</b></div>` : ''}<div><span>Pesa en tu cartera</span><b>${r.g ? num(r.g.cw * 100, 1) + '%' : '–'}</b></div></div>
         <div class="small" style="margin-top:6px">La app dice «${esc(r.ev.label)}». ${r.b === 'sell' ? 'Plantéate vender una parte o poner un precio de salida (stop) en «Mi posición».' : 'Mejor no comprar más; si te preocupa, pon un precio de salida (stop) en «Mi posición» en vez de vender todo de golpe.'}</div>
+        ${paHtml({ sym: r.a.yahoo, name: r.a.name, id: r.a.id, pxEur: r.pxEur, fx: r.sn.fx, limit: 0 })}
         ${factorsHtml(r.ev, r.extra)}
         <div class="small muted" style="margin-top:4px">${histText(r.bt, r.b)}${pl != null ? (pl > 0 ? ' Si vendes, pagarás impuestos por la ganancia.' : ' Si vendes con pérdidas, puedes restarlas de tus ganancias del año (ojo con la regla de los 2 meses si vuelves a comprar).') : ''}</div></div>`;
     };
-    view.innerHTML = `<div class="card"><h2>⚖️ Para equilibrar tu cartera</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
+    view.innerHTML = `${soon.length ? `<div class="card signal y"><b>⚠️ Esta semana: ${soon.map(e => `${esc(e.title)} (${new Date(e.date + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric' })})`).join(' · ')}</b><div class="small" style="margin-top:4px">Si vas a comprar, plantéate esperar a conocer el resultado: evita entrar justo antes de un salto. Más detalle en la Agenda.</div></div>` : ''}
+      <div class="card small muted">🔔 Con «Avísame…» te llega una notificación cuando el precio llegue a la entrada recomendada o si cae fuerte. Los gestionas en Ajustes &gt; Notificaciones.</div>
+      <div class="card"><h2>⚖️ Para equilibrar tu cartera</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
         <div class="small muted" style="margin-bottom:6px">Activos tuyos que se han quedado por debajo del reparto propuesto. Completar el reparto con dinero nuevo es lo que mejor ha funcionado en la prueba histórica, aunque la señal no sea de compra clara. El precio de entrada es una bajada normal de una semana: se alcanza más o menos la mitad de las veces.</div>
         ${balance.length ? balance.map(card).join('') : '<div class="muted small">Tu cartera está cerca del reparto propuesto: no hace falta equilibrar.</div>'}</div>
       <div class="card"><h2>📈 Señales claras de compra</h2><div class="small" style="margin-bottom:4px">👆 Toca cualquier activo para ver su gráfica.</div>
         <div class="small muted" style="margin-bottom:6px">Las de señal más favorable, estén o no en tu cartera y sin mirar su peso. Revisados tus activos y ${num(watchN, 0)} más: ${(window.WATCHLIST || []).length} en el móvil (ETFs, grandes de EE. UU., Euro Stoxx 50 e IBEX 35)${scan ? ` y ${scan.scanned} del S&P 500 y Nasdaq 100 cada noche (último: ${esc(scan.date)})` : ''}. Se ordenan buscando la mayor rentabilidad con el menor riesgo: a señal parecida, va antes el que menos oscila. Primero se filtran por precio y tendencia, y los 14 mejores se analizan a fondo con noticias, analistas, cuentas y mercado. Para los que no tienes no hay datos oficiales de directivos ni de grandes fondos (solo se descargan de la SEC para tus activos). Aun así, nada garantiza que suba: si compras algo nuevo, empieza con poco (un 2-3% de tu cartera).</div>
-        ${clear.length ? clear.map((r, i) => oppOut(r, i)).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
+        ${clear.length ? clear.map((r, i) => oppOut(Object.assign(r, { earn: earn[r.w.yahoo] }), i)).join('') : '<div class="muted small">Hoy ninguno da una señal claramente favorable.</div>'}</div>
       <div class="card"><h2>📉 Para vender o reducir</h2>
         <div class="small muted" style="margin-bottom:6px">Tus activos con señal de precaución o de reducir. Nadie sabe con seguridad si algo va a bajar: por eso ves la fuerza de la señal y cuánto ha acertado antes en ese mismo activo.</div>
         ${sells.length ? sells.map(sellCard).join('') : '<div class="muted small">Ninguno de tus activos tiene hoy señal de vender.</div>'}
         ${heavy.length ? `<div class="small" style="margin-top:8px"><b>Pesan de más</b> (señal normal, pero por encima del reparto): ${heavy.map(r => `${esc(r.a.name)} ${num(r.g.cw * 100, 1)}% (propuesto ${num(r.g.tw * 100, 1)}%)`).join(', ')}. Lo más sencillo es no comprar más de estos y equilibrar con tus aportaciones.</div>` : ''}</div>
       <div class="card" id="ownCard"><h2>⭐ Tu lista</h2><div class="small muted" style="margin-bottom:6px">Activos que quieres vigilar aunque no los tengas. Aquí salen siempre, con la señal que tengan.</div>
-        ${own.map((r, i) => r ? oppOut(r, i, settings.watch[i].yahoo) : `<div class="reason small">${esc(settings.watch[i].name)}: sin datos ahora <button class="icon" data-wdel="${esc(settings.watch[i].yahoo)}">✕</button></div>`).join('') || '<div class="muted small">Aún no has añadido ninguno.</div>'}
+        ${own.map((r, i) => r ? oppOut(Object.assign(r, { earn: earn[r.w.yahoo] }), i, settings.watch[i].yahoo) : `<div class="reason small">${esc(settings.watch[i].name)}: sin datos ahora <button class="icon" data-wdel="${esc(settings.watch[i].yahoo)}">✕</button></div>`).join('') || '<div class="muted small">Aún no has añadido ninguno.</div>'}
         <input id="wq" placeholder="Añadir: busca por nombre o ticker (ej. Coca-Cola, KO)" style="margin-top:8px"><div id="wres"></div></div>
       <div class="card small muted">Fear & Greed: bolsa ${fg.stocks ? Math.round(fg.stocks.score) : '–'}, cripto ${fg.crypto ? Math.round(fg.crypto.score) : '–'}. Los precios en euros son al cambio de hoy; en Trade Republic el precio puede variar un poco según la bolsa. ${monthly ? `Las cantidades parten de tu aportación de ${eur(monthly)} al mes (Riesgo).` : 'Si pones tu aportación mensual en Riesgo > Reparto propuesto, las cantidades se ajustan a ella.'}</div>
       <div class="disclaimer">Lista orientativa generada automáticamente, no es asesoramiento financiero. Nadie sabe si un precio va a subir o bajar: la prueba histórica muestra que la app acierta la dirección poco más que el azar, y que lo que más ayuda es repartir bien y comprar de forma regular. Decide tú y no inviertas dinero que puedas necesitar.</div>`;
@@ -1360,6 +1433,7 @@
       if (el.dataset.open) { go('detalle', el.dataset.open); current.tab = 'grafica'; render(); }
       else openExternal({ name: el.dataset.nm, yahoo: el.dataset.sym });
     });
+    bindPa(view);
     view.querySelectorAll('[data-wdel]').forEach(b => b.onclick = e => { e.stopPropagation(); settings.watch = (settings.watch || []).filter(x => x.yahoo !== b.dataset.wdel); save('settings', settings); renderOpps(); });
     let tm; $('#wq').oninput = () => { clearTimeout(tm); tm = setTimeout(async () => {
       const q = $('#wq').value.trim(); if (q.length < 2) { $('#wres').innerHTML = ''; return; }
@@ -1607,7 +1681,7 @@
   }
 
   // ---------- Notificaciones en el móvil (las envía Android aunque la app esté cerrada) ----------
-  const NOTIF_DEF = { on: true, move: true, moveTh: 0.08, levels: true, signal: true, fg: true, ins: true, max: 3, quiet: true };
+  const NOTIF_DEF = { on: true, move: true, moveTh: 0.08, levels: true, ev: true, signal: true, fg: true, ins: true, max: 3, quiet: true };
   const notifCfg = () => Object.assign({}, NOTIF_DEF, settings.notif || {});
   function syncNotif() {
     if (!window.NativeNotif) return;
@@ -1616,8 +1690,16 @@
       const held = assets.filter(a => { try { return P.position(a).qty > 0; } catch (e) { return a.qty > 0; } });
       const list = (held.length ? held : assets).map(a => ({ id: a.id, name: a.name, sym: a.yahoo, crypto: isCrypto(a),
         buy: (a.rules || {}).buyBelow || 0, sell: (a.rules || {}).sellAbove || 0, stop: (a.rules || {}).stopBelow || 0 }));
-      window.NativeNotif.setConfig(JSON.stringify(Object.assign({}, n, { repo: settings.dataRepo, branch: settings.branch, assets: list })));
+      window.NativeNotif.setConfig(JSON.stringify(Object.assign({}, n, { repo: settings.dataRepo, branch: settings.branch, assets: list,
+        palerts: palerts().map(x => ({ k: x.k, sym: x.sym, name: x.name, id: x.id, v: x.v, eur: x.eur, below: x.below, what: x.what })),
+        events: (evFeedV || []).map(e => ({ k: e.k, date: e.date, title: e.title, text: e.text, id: e.id })) })));
     } catch (e) {}
+  }
+  function paListHtml() {
+    const L = palerts(), hit = new Set(notifStatus().paHit || []);
+    const W = { entrada: 'entrada recomendada', stop: 'caída fuerte', objetivo: 'objetivo' };
+    return L.length ? L.map(x => `<div class="reason small row"><span class="grow"><b>${esc(x.name)}</b>: ${x.below ? 'si baja a' : 'si sube a'} ${num(x.eur, 2)} € (${W[x.what] || x.what})${hit.has(x.k) ? ' · <b class="up">✓ se cumplió</b>' : ''}</span><button class="icon" data-pdel="${esc(x.k)}">✕</button></div>`).join('')
+      : '<div class="small muted">Aún no tienes. En Oportunidades, toca «🔔 Avísame…» en cualquier activo.</div>';
   }
   function notifStatus() { try { return JSON.parse(window.NativeNotif.status()); } catch (e) { return {}; } }
   function notifCard() {
@@ -1626,7 +1708,8 @@
     return `<div class="card" id="notifCard"><h2>Notificaciones</h2>
       ${ck('on', '<b>Recibir avisos en el móvil</b>', 'La app revisa tu cartera cada 2 horas más o menos, aunque esté cerrada.')}
       <div id="notifOpts" style="${n.on ? '' : 'opacity:.45;pointer-events:none'}">
-      ${ck('levels', 'Tus precios de aviso', 'Los que pones en cada activo, en «Mi posición»: comprar más, vender y precio de salida.')}
+      ${ck('levels', 'Tus precios de aviso', 'Los que pones en «Mi posición» (comprar más, vender, salida) y los que activas con 🔔 en Oportunidades.')}
+      ${ck('ev', 'Eventos importantes', 'El día antes de que tus empresas presenten resultados y de reuniones de bancos centrales u otros eventos de impacto alto que te afecten.')}
       ${ck('move', 'Movimientos fuertes del día', `Si un activo tuyo sube o baja más de <select id="nTh" style="width:auto;display:inline-block;padding:2px 6px;margin:0">${[0.05, 0.08, 0.1, 0.15].map(v => `<option value="${v}" ${v === n.moveTh ? 'selected' : ''}>${v * 100}%</option>`).join('')}</select> en un día (en criptos, 1,5 veces eso).`)}
       ${ck('signal', 'Cambios importantes de la señal', 'Cuando un activo pasa a «Comprar», «Reducir» o «Precaución», o sale de ahí. Una vez al día.')}
       ${ck('ins', 'Compras de directivos', 'Cuando un directivo compra acciones de su empresa con su dinero.')}
@@ -1634,6 +1717,7 @@
       <label>Máximo de avisos al día</label><select id="nMax">${[1, 3, 5, 10].map(v => `<option ${v === n.max ? 'selected' : ''}>${v}</option>`).join('')}</select>
       ${ck('quiet', 'No avisar de noche', 'Entre las 22:00 y las 8:00 no llega nada.')}
       <div class="small muted">Si hay más avisos de los que caben, se juntan en una sola notificación.</div>
+      <h3 style="margin-top:12px">🔔 Tus avisos de precio</h3><div id="paList">${paListHtml()}</div>
       </div>
       <div class="btns"><button class="btn sec" id="nTest">Probar</button><button class="btn sec" id="nNow">Comprobar ahora</button></div>
       <div class="small muted" id="nStat"></div></div>`;
@@ -1645,6 +1729,7 @@
       save('settings', settings); syncNotif(); $('#notifOpts').style.cssText = settings.notif.on ? '' : 'opacity:.45;pointer-events:none';
       if (settings.notif.on) window.NativeNotif.askPermission(); showStat(); };
     $('#notifCard').querySelectorAll('[data-nk]').forEach(c => c.onchange = upd);
+    const rebindPa = () => { $('#paList').innerHTML = paListHtml(); bindPa($('#paList'), rebindPa); }; bindPa($('#paList'), rebindPa);
     $('#nTh').onchange = upd; $('#nMax').onchange = upd;
     $('#nTest').onclick = () => { window.NativeNotif.askPermission(); window.NativeNotif.test(); setTimeout(showStat, 800); };
     $('#nNow').onclick = () => { window.NativeNotif.askPermission(); window.NativeNotif.runNow(); toast('Comprobando… te llegará una notificación'); setTimeout(showStat, 15000); };
@@ -1655,6 +1740,7 @@
     showStat();
   }
   window.openAsset = id => { if (assets.some(a => a.id === id)) { stack.length = 0; current = { name: 'cartera' }; go('detalle', id); } };
+  setTimeout(() => refreshEvents(), 8000);
   try { syncNotif(); if (window.NativeNotif && notifCfg().on && !settings.notifAsked) { settings.notifAsked = 1; save('settings', settings); window.NativeNotif.askPermission(); } } catch (e) {}
 
   render();
