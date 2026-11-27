@@ -592,7 +592,7 @@
   }
 
   // ---------- Vista: Detalle ----------
-  const DETAIL_TABS = [['analisis', 'Análisis'], ['grafica', 'Gráfica'], ['noticias', 'Noticias'], ['geo', 'Geopolítica'], ['oficial', 'Oficial'], ['fondos', 'Grandes fondos'], ['posicion', 'Mi posición']];
+  const DETAIL_TABS = [['analisis', 'Análisis'], ['posicion', 'Mi posición'], ['grafica', 'Gráfica'], ['noticias', 'Noticias'], ['geo', 'Geopolítica'], ['oficial', 'Oficial'], ['fondos', 'Grandes fondos']];
   // Activos que no están en tu cartera (desde Oportunidades): se abren con las pestañas que no necesitan posición.
   const tempAssets = {};
   function openExternal(w, tab = 'grafica') {
