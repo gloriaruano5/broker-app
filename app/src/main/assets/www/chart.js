@@ -120,7 +120,8 @@
     });
     const lastPane = subs.length ? 'sub' : showVol ? 'vol' : 'main';
     const charts = [];
-    const main = base(root.querySelector('#pcMain'), 300, lastPane === 'main', true); charts.push(main);
+    // Fechas siempre debajo de las velas (y también en el último panel), para que se vean sin bajar la pantalla.
+    const main = base(root.querySelector('#pcMain'), 300, true, true); charts.push(main);
     const line = (ch, color, width = 1, extra = {}) => ch.addLineSeries({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...extra });
     const ser = (arr) => { const out = []; arr.forEach((x, i) => { if (x != null && isFinite(x)) out.push({ time: t[i], value: x }); }); return out; };
 
