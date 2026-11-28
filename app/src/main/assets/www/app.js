@@ -227,7 +227,7 @@
       const ed = ce.earnings && ce.earnings.earningsDate ? ce.earnings.earningsDate.map(raw).filter(Boolean) : [];
       return { pe: raw(sd.trailingPE), fpe: raw(sd.forwardPE) || raw(ks.forwardPE), revenueGrowth: raw(fd.revenueGrowth), earningsGrowth: raw(fd.earningsGrowth),
         divYield: raw(sd.dividendYield) || raw(sd.yield), exDiv: raw(ce.exDividendDate) || raw(sd.exDividendDate), divDate: raw(ce.dividendDate),
-        earnings: ed, sector: ap.sector, country: ap.country, targetPrice: raw(fd.targetMeanPrice), recommendation: fd.recommendationKey };
+        earnings: ed, sector: ap.sector, country: ap.country, targetPrice: raw(fd.targetMeanPrice), targetLow: raw(fd.targetLowPrice), targetHigh: raw(fd.targetHighPrice), analysts: raw(fd.numberOfAnalystOpinions), recommendation: fd.recommendationKey };
     });
   }
   // Eventos que pueden mover mucho el precio (se actualizan desde el repositorio sin instalar otra versión).
@@ -1559,48 +1559,66 @@
     if (current.name !== 'oportunidades') return;
     // Gráfico resumen: potencial a 12 meses frente a fiabilidad y riesgo, ordenado por el balance entre ganancia y riesgo.
     const topChart = (() => {
-      // Con los resultados a 12 meses de su propio historial (unos 10 años, mes a mes): lo más probable, la probabilidad
-      // de ganar o perder, un año malo y uno bueno (1 de cada 10), y con qué frecuencia se llegó al objetivo de los analistas.
+      // Previsión a 1 año con lo que se sabe HOY, no con lo que pasó antes. Se mezclan:
+      //  · el objetivo medio de los analistas (rebajado, porque históricamente se quedan cortos de realismo: suelen prometer de más),
+      //  · lo que da de media este tipo de activo a largo plazo,
+      //  · la señal de la app (gráfica, noticias, cuentas, directivos, grandes fondos, sentimiento, geopolítica y mercado),
+      //  · y, con poco peso, su propio historial.
+      // El rango y la probabilidad de ganar salen de cuánto oscila el activo.
       const seenC = new Set(clear.map(r => r.w.yahoo));
-      const q = (a, p) => a[Math.min(a.length - 1, Math.max(0, Math.round(p * (a.length - 1))))];
+      const cl = (v, a, b) => Math.max(a, Math.min(b, v));
+      const Phi = z => { const t = 1 / (1 + 0.2316419 * Math.abs(z)), d = 0.3989423 * Math.exp(-z * z / 2), p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274)))); return z > 0 ? 1 - p : p; };
       const items = [...clear, ...balance.filter(r => !seenC.has(r.a.yahoo)).map(asSig)].map(r => {
-        const pr = prob[r.w.yahoo], R = pr && pr.r12; if (!R || R.length < 24) return null;
+        const sym = r.w.yahoo, pr = prob[sym];
+        const vol = cl((r.sdD || 0.02) * Math.sqrt(252), 0.08, 1.5);
         const ys = r.extra && r.extra.summary, pxN = r.fx ? r.pxEur / r.fx : null;
-        const an = ys && ys.targetPrice && pxN ? ys.targetPrice / pxN - 1 : null;
-        const pUp = R.filter(x => x > 0).length / R.length;
-        const p10 = q(R, 0.1), p25 = q(R, 0.25), p50 = q(R, 0.5), p75 = q(R, 0.75), p90 = q(R, 0.9);
-        const mean = R.reduce((a, b) => a + Math.max(-0.8, Math.min(1.5, b)), 0) / R.length;
-        const pAn = an != null ? R.filter(x => x >= an).length / R.length : null;
+        const an = ys && ys.targetPrice && pxN ? ys.targetPrice / pxN - 1 : null, nAn = ys && ys.analysts || null;
+        const tA = ((assets.find(a => a.yahoo === sym) || {}).type || '') + ' ' + (r.w.tag || '');
+        const kindA = /-USD$/.test(sym) || /Cripto/i.test(tA) ? 'cripto' : /=F$/.test(sym) || /Materia/i.test(tA) ? 'materia' : /ETF|Índice|Fondo/i.test(tA) ? 'etf' : 'accion';
+        const base = { cripto: 0.05, materia: 0.04, etf: 0.07, accion: 0.07 }[kindA];
+        const hist = pr && pr.y1med != null ? cl(pr.y1med, -0.15, 0.25) : null;
+        const longRun = hist != null ? 0.75 * base + 0.25 * hist : base;
+        const wA = an == null ? 0 : nAn >= 5 ? 0.6 : nAn >= 2 ? 0.45 : 0.35;
+        const anPart = an != null ? 0.6 * cl(an, -0.5, 0.6) : 0;
+        const score = r.ev ? r.ev.score : r.score || 0, tilt = 0.06 * cl(score / 4, -1, 1);
+        const exp = wA * anPart + (1 - wA) * longRun + tilt;
+        const m = Math.log(1 + exp), lo = Math.exp(m - 1.2816 * vol) - 1, hi = Math.exp(m + 1.2816 * vol) - 1;
+        const pUp = Phi(m / vol), pAn = an != null ? 1 - Phi((Math.log(1 + an) - m) / vol) : null;
         const sig = r.ev && r.ev.confidence ? r.ev.confidence.level : null, nSrc = r.ev && r.ev.cats ? r.ev.cats.length : null;
-        // Orden: lo que se suele ganar de media, restando un poco por lo que se puede perder en un año malo.
-        const bal = mean + 0.25 * p10;
-        const risk = p10 > -0.2 ? ['bajo', 'up'] : p10 > -0.35 ? ['medio', 'warn'] : ['alto', 'down'];
-        return { r, an, pAn, pUp, p10, p25, p50, p75, p90, bal, sig, nSrc, risk, yrs: pr.yrs };
+        // Orden: la subida esperada, restando un poco por lo que se puede perder en un año malo (ajustado al riesgo).
+        const bal = exp + 0.25 * lo;
+        const risk = lo > -0.2 ? ['bajo', 'up'] : lo > -0.35 ? ['medio', 'warn'] : ['alto', 'down'];
+        const parts = [
+          an != null ? `analistas ${pctS(an)}${nAn ? ` (${nAn})` : ''}` : 'sin analistas',
+          `largo plazo ${pctS(longRun)} (media de ${{ cripto: 'la cripto', materia: 'las materias primas', etf: 'fondos así', accion: 'la bolsa' }[kindA]}${hist != null ? ' y su historial' : ''})`,
+          `señal de la app ${tilt >= 0 ? '+' : ''}${num(tilt * 100, 1)} puntos`];
+        return { r, an, nAn, pAn, pUp, exp, lo, hi, bal, sig, nSrc, risk, parts, hmed: pr && pr.y1med, yrs: pr && pr.yrs };
       }).filter(Boolean).sort((x, y) => y.bal - x.bal).slice(0, 8);
       if (!items.length) return '';
-      const lo = Math.min(-0.1, ...items.map(x => x.p10)), hi = Math.max(0.1, ...items.map(x => Math.max(x.p90, x.an || 0)));
+      const lo = Math.min(-0.1, ...items.map(x => x.lo)), hi = Math.max(0.1, ...items.map(x => Math.max(x.hi, x.an || 0)));
       const X = v => ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * 100).toFixed(1);
       const P = v => Math.round(v * 100) + '%';
       return `<div class="card"><h2>🏆 Mejores oportunidades de un vistazo</h2>
-        <div class="small muted" style="margin-bottom:6px">Qué pasó en su propio historial cada vez que alguien compró y esperó <b>un año</b>. Ordenadas por lo que más se ganó de media, restando el riesgo de un año malo. Toca una para ver su ficha.</div>
-        <div class="tc-legend small"><span><i class="lg-band"></i> 8 de cada 10 años</span><span><i class="lg-mid"></i> lo más probable</span><span>▲ objetivo analistas</span><span><i class="lg-zero"></i> 0 %</span></div>
+        <div class="small muted" style="margin-bottom:6px">Cuánto se espera que suba en <b>un año</b> con todos los datos de hoy: objetivo de los analistas, cuentas, noticias, sentimiento, grandes fondos, directivos, geopolítica, mercado y tendencia. Ordenadas por subida esperada, restando el riesgo de un año malo. Toca una para ver su ficha.</div>
+        <div class="tc-legend small"><span><i class="lg-band"></i> 8 de cada 10 casos</span><span><i class="lg-mid"></i> subida esperada</span><span>▲ objetivo analistas</span><span><i class="lg-zero"></i> 0 %</span></div>
         ${items.map((x, i) => `<div class="tc-row" data-open="${esc(x.r.ownId || '')}" data-sym="${esc(x.r.w.yahoo)}" data-nm="${esc(x.r.w.name)}">
           <div class="row"><b class="grow">${i + 1}. ${esc(x.r.w.name)}</b><span class="badge ${x.risk[1]}">riesgo ${x.risk[0]}</span></div>
-          <div class="small" style="margin:2px 0 6px">Lo más probable en 1 año: <b class="${x.p50 >= 0 ? 'up' : 'down'}" style="font-size:15px">${pctS(x.p50)}</b></div>
+          <div class="small" style="margin:2px 0 2px">Subida esperada en 1 año: <b class="${x.exp >= 0 ? 'up' : 'down'}" style="font-size:16px">${pctS(x.exp)}</b></div>
+          <div class="small muted" style="margin-bottom:6px">Sale de: ${x.parts.map(esc).join(' · ')}</div>
           <div class="tc-prob"><div class="g" style="width:${P(x.pUp)}">${x.pUp >= 0.18 ? 'gana ' + P(x.pUp) : ''}</div><div class="r" style="width:${P(1 - x.pUp)}">${1 - x.pUp >= 0.18 ? 'pierde ' + P(1 - x.pUp) : ''}</div></div>
           <div class="tc-strip"><div class="zero" style="left:${X(0)}%"></div>
-            <div class="band" style="left:${X(x.p10)}%;width:${(X(x.p90) - X(x.p10)).toFixed(1)}%"></div>
-            <div class="band2" style="left:${X(x.p25)}%;width:${(X(x.p75) - X(x.p25)).toFixed(1)}%"></div>
-            <div class="mid" style="left:${X(x.p50)}%"></div>
+            <div class="band" style="left:${X(x.lo)}%;width:${(X(x.hi) - X(x.lo)).toFixed(1)}%"></div>
+            <div class="mid" style="left:${X(x.exp)}%"></div>
             ${x.an != null ? `<div class="tgt" style="left:${X(x.an)}%">▲</div>` : ''}</div>
-          <div class="row small" style="justify-content:space-between"><span class="down">año malo ${pctS(x.p10)}</span><span class="up">año bueno ${pctS(x.p90)}</span></div>
+          <div class="row small" style="justify-content:space-between"><span class="down">año malo ${pctS(x.lo)}</span><span class="up">año bueno ${pctS(x.hi)}</span></div>
           <div class="small muted tc-kv">
-            <span>📉 Perder dinero: <b>${P(1 - x.pUp)}</b> de las veces</span>
-            <span>⚠️ Caer ${pctS(x.p10)} o más: <b>1 de cada 10</b> años</span>
-            ${x.an != null ? `<span>🎯 Llegar al objetivo de analistas (${pctS(x.an)}): <b>${P(x.pAn)}</b> de las veces</span>` : '<span>🎯 Sin objetivo de analistas</span>'}
-            <span>🔎 ${x.nSrc ? `${x.nSrc} tipos de datos` : 'Datos de precio'}${x.sig ? ` · confianza ${x.sig.toLowerCase()}` : ''} · ${x.yrs} años de historial</span>
+            <span>📈 Probabilidad de ganar dinero: <b>${P(x.pUp)}</b> · de perder: <b>${P(1 - x.pUp)}</b></span>
+            <span>⚠️ Caer ${pctS(x.lo)} o más: <b>1 de cada 10</b> veces</span>
+            ${x.an != null ? `<span>🎯 Llegar al objetivo de analistas (${pctS(x.an)}): <b>${P(x.pAn)}</b></span>` : '<span>🎯 Sin objetivo de analistas</span>'}
+            ${x.hmed != null ? `<span>🕰️ Dato del pasado (pesa poco): en sus últimos ${x.yrs} años, la mitad de los años dio más de ${pctS(x.hmed)}</span>` : ''}
+            <span>🔎 ${x.nSrc ? `${x.nSrc} tipos de datos` : 'Datos de precio'}${x.sig ? ` · confianza ${x.sig.toLowerCase()}` : ''}</span>
           </div></div>`).join('')}
-        <div class="small muted" style="margin-top:6px">Es lo que pasó antes, no una garantía. Fíjate en el par «lo más probable» y «perder dinero»: un activo que gana mucho en un año bueno pero pierde a menudo es más arriesgado.</div></div>`;
+        <div class="small muted" style="margin-top:6px">Es una estimación orientativa, no una garantía. Los objetivos de los analistas se rebajan porque suelen ser optimistas, y lo que pasó antes cuenta poco porque no se repite necesariamente.</div></div>`;
     })();
     const sellCard = r => {
       const pl = r.sn.plEur;
